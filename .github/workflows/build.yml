@@ -97,10 +97,8 @@ jobs:
             --notes "Installa dal sito: https://teryox77.github.io/ondadream-fm1/webapp/installer/ oppure scarica il file .fwsc qui sotto."
 
       - uses: actions/configure-pages@v5
-        continue-on-error: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
       - id: deploy
         uses: actions/deploy-pages@v4
-        continue-on-error: true
