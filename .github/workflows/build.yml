@@ -1,0 +1,106 @@
+# OndaDream: on every push to main, build the FM-1 package (.fwsc) with the JieLi toolchain, the browser
+# emulator, and the site (installer + emulator + editor) on GitHub Pages; the package goes to the release "latest".
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld python3-pil python3-fonttools xz-utils
+
+      - name: JieLi toolchain
+        run: |
+          for i in 1 2 3; do tools/get_toolchain.sh && break; echo "retry $i"; sleep 20; done
+          test -x "$HOME/.jieli/toolchain/pi32v2/bin/clang"
+
+      - name: JieLi AC79 SDK (three files of it)
+        run: |
+          SDK="$HOME/fw-AC79_AIoT_SDK"
+          URL=https://gitee.com/Jieli-Tech/fw-AC79_AIoT_SDK.git
+          TAG=AC79NN_SDK_V1.2.1_2023-12-13
+          for i in 1 2 3; do
+            rm -rf "$SDK"
+            if git clone --depth 1 --branch "$TAG" --filter=blob:none --sparse "$URL" "$SDK" \
+               && git -C "$SDK" sparse-checkout set cpu/wl82/tools; then break; fi
+            rm -rf "$SDK"
+            git clone --depth 1 --branch "$TAG" "$URL" "$SDK" && break
+            echo "retry $i"; sleep 30
+          done
+          ls -la "$SDK/cpu/wl82/tools/uboot.boot" "$SDK/cpu/wl82/tools/cfg_tool.bin" "$SDK/cpu/wl82/tools/cfg/eq_cfg_hw.bin"
+
+      - name: Build the firmware
+        run: ./build.sh
+
+      - name: Package
+        run: |
+          VER=$(sed -n 's/^#define ONDA_VERSION "\([^"]*\)".*/\1/p' firmware/src/ui_draw.c | head -n 1)
+          mkdir -p dist
+          cp build/felucca.fwsc "dist/ondadream-${VER}.fwsc"
+          (cd dist && sha256sum *.fwsc > SHA256SUMS)
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          ls -la dist
+
+      - name: Browser emulator
+        run: tools/onda/build_emu.sh
+
+      - name: Site (installer, editor, emulator)
+        run: |
+          python3 web/make_site.py "dist/ondadream-${VER}.fwsc" "${VER#v}" site
+          mkdir -p site/webapp/try
+          cp -r build/emu/* site/webapp/try/
+          cat > site/index.html <<'HTML'
+          <!doctype html><meta charset="utf-8"><title>OndaDream</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <style>body{font:16px/1.6 -apple-system,system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;background:#141518;color:#e6e8eb}a{color:#ff7a1a}</style>
+          <h1>OndaDream</h1>
+          <p>Firmware per M-VAVE FM-1 (fork di Felucca).</p>
+          <ul>
+          <li><a href="webapp/try/">Provalo nel browser (emulatore)</a></li>
+          <li><a href="webapp/installer/">Installa sull'FM-1 (Chrome o Edge, USB)</a></li>
+          <li><a href="webapp/editor/">Editor</a></li>
+          <li><a href="https://github.com/Teryox77/ondadream-fm1">Codice sorgente</a></li>
+          </ul>
+          HTML
+
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ondadream-fwsc
+          path: dist/
+
+      - name: Release "latest"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create latest dist/*.fwsc dist/SHA256SUMS --prerelease \
+            --title "OndaDream ${VER} (build ${GITHUB_RUN_NUMBER})" \
+            --notes "Installa dal sito: https://teryox77.github.io/ondadream-fm1/webapp/installer/ oppure scarica il file .fwsc qui sotto."
+
+      - uses: actions/configure-pages@v5
+        continue-on-error: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
