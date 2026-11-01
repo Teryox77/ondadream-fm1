@@ -159,6 +159,11 @@ void fm1_cstart(void)
     uint32_t *s, *d;
     fm1_time_init();
     fm1_wdt_arm(0x0D);
+    /* the supplies at M-VAVE's own levels (its firmware sets them as it starts, at the same 360 MHz; fm1_sys.h): at the
+     * boot loader's, under load and on the battery, a unit can read flash and SRAM wrong */
+    fm1_vdc14_raise(7);
+    fm1_sysvdd_raise(15);
+    fm1_power_stock();
     if (guard.magic != 0x4F445231u) {
         guard.magic = 0x4F445231u;
         guard.failed = 0;
