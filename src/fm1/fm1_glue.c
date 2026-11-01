@@ -15,7 +15,47 @@ static struct { uint32_t magic, pending, failed; } guard __attribute__((section(
 /* how far each boot got (main.c BOOT_STAGE), kept across resets: the rescue screen shows the last ones */
 static struct { uint32_t magic; uint8_t stage, hist[4]; uint8_t p3_rst; } diag __attribute__((section(".noinit")));
 #define DIAG_MAGIC 0x4F444431u
-static void boot_stage(uint32_t s) { diag.stage = (uint8_t)s; }
+/* a boot log in the flash (survives power-off; the USB recovery tool's full backup carries it): one byte a step,
+ * appended to the 4 KiB sector at FLOG (outside the app area the installers write, below every firmware's store),
+ * erased when full. 0xB0 a boot, then the reset reason (P33 RST_SRC), then the stages 1..9, 0xC0 the rescue,
+ * 0xEE + vector a fault, 0xDB UBOOT entry */
+#define FLOG 0x95000u
+static uint8_t flog_ok;
+static uint32_t flog_at;
+static int ota_fread(uint32_t off, void *p, uint32_t n);
+static void flog(uint8_t c)
+{
+    uint32_t took;
+    if (!flog_ok)
+        return;
+    if (flog_at >= 0x1000u) {
+        fl_erase4k(FLOG, &took);
+        flog_at = 0;
+    }
+    fl_write(FLOG + flog_at, &c, 1);
+    flog_at++;
+}
+static void flog_init(void)
+{
+    uint8_t b[256];
+    uint32_t i, f = irq_save();
+    flog_ok = FL_FAR(fl_jedec_ram)() == 0x856014u;
+    irq_restore(f);
+    if (!flog_ok)
+        return;
+    for (flog_at = 0; flog_at < 0x1000u; flog_at += 256u) {   /* the first unwritten byte */
+        if (ota_fread(FLOG + flog_at, b, 256))
+            return;
+        for (i = 0; i < 256u; i++)
+            if (b[i] == 0xFFu)
+                break;
+        if (i < 256u) {
+            flog_at += i;
+            break;
+        }
+    }
+}
+static void boot_stage(uint32_t s) { diag.stage = (uint8_t)s; flog((uint8_t)s); }
 static volatile uint8_t in_audio;               /* set by the audio ISR: the tick nests into it */
 static volatile uint8_t usb_on;                 /* usb_start has run: the tick may poll it */
 
@@ -136,8 +176,9 @@ static void fm1_fault(const fm1_crash_t *c)
 {
     static uint16_t red[240];
     uint32_t i;
-    (void)c;
     fm1_audio_stop();
+    flog(0xEE);
+    flog((uint8_t)c->vec);
     for (i = 0; i < 240u; i++)
         red[i] = 0x00F8u;                       /* 0xF800, high byte first */
     lcd_window(0, 0, 240, 240);
@@ -160,7 +201,7 @@ static void app_main(void);
 
 void fm1_cstart(void)
 {
-    uint32_t *s, *d;
+    uint32_t *s, *d, uboot_due;
     fm1_cpu1_stop();                            /* the second core held first: a reset (a watchdog, a fault, the update,
                                                  * the firmware before this one) can leave it running old code, which
                                                  * would write into the RAM cleared below (as Felucca's start) */
@@ -188,11 +229,7 @@ void fm1_cstart(void)
     if (guard.pending)
         guard.failed++;
     guard.pending = 1;
-    if (guard.failed >= 4u) {                   /* the rescue failed too: the chip's own update mode */
-        guard.failed = 0;
-        guard.pending = 0;
-        fm1_enter_uboot();
-    }
+    uboot_due = guard.failed >= 4u;             /* the rescue failed too: the chip's own update mode (after the log) */
     fm1_irq_init();
     for (d = _bss_start; d < _bss_end; d++)
         *d = 0;
@@ -204,6 +241,16 @@ void fm1_cstart(void)
     for (s = _rt_load, d = _rt_start; d < _rt_end; s++, d++)    /* the flash driver, run from RAM */
         *d = *s;
     fm1_mailbox_clear();                        /* boot info and mailbox: nothing stale (an old "usb_update_mode") */
+    flog_init();
+    flog(0xB0);
+    flog(fm1_boot.p3_rst);
+    flog((uint8_t)guard.failed);
+    if (uboot_due) {
+        flog(0xDB);
+        guard.failed = 0;
+        guard.pending = 0;
+        fm1_enter_uboot();
+    }
     fm1_guard_enable(FM1_GUARD_STACK | FM1_GUARD_WRITE | FM1_GUARD_BUS | FM1_GUARD_PC);
     app_main();
     for (;;)

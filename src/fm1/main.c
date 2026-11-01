@@ -203,6 +203,7 @@ static void rescue_main(void)
 {
     char b[48], *e;
     uint32_t i;
+    flog(0xC0);
     fb = fbuf;                                  /* the core's drawing (gfx.c), on the frame */
     g_reset();
     fill_rect(0, 0, 240, 240, 0xFD20u);         /* orange: the rescue */
