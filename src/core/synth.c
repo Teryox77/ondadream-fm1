@@ -598,6 +598,48 @@ static void preset_load(int i)
     P.vol = keep_vol > 0.f ? keep_vol : p->vol;
     set_arp_pattern(p->arpPattern);
 }
+/* a self-test of the arithmetic the voices use, run once at start: GLOBAL shows it (the FM-1 against the computer) */
+static char od_test_txt[48];
+static void st_num(char **e, int32_t v)
+{
+    char b[12];
+    int n = 0;
+    uint32_t u = v < 0 ? (uint32_t)-v : (uint32_t)v;
+    if (v < 0) *(*e)++ = '-';
+    do { b[n++] = (char)('0' + u % 10u); u /= 10u; } while (u);
+    while (n) *(*e)++ = b[--n];
+    *(*e)++ = ' ';
+    **e = 0;
+}
+void od_selftest(void)
+{
+    static volatile float vf[3] = {2.f, -3.f, .5f};
+    static volatile uint32_t vph = 0x20000000u;
+    static int32_t out[256];
+    voice_t t;
+    patch_t keep = PS;
+    char *e = od_test_txt;
+    uint32_t w, i, k;
+    st_num(&e, (int32_t)(CLAMP(vf[0], 0.f, 1.f) * 100.f));      /* 100 */
+    st_num(&e, (int32_t)(CLAMP(vf[1], 0.f, 1.f) * 100.f));      /* 0 */
+    st_num(&e, (int32_t)(CLAMP(vf[2], 0.f, 1.f) * 100.f));      /* 50 */
+    st_num(&e, osc(vph, 1000u, 3u));                           /* the sine table: 23170 */
+    for (w = 0; w < 4u; w++) {                                 /* a voice of each wave: its mean level */
+        uint64_t acc = 0;
+        PS.wave = (float)w;
+        v_on(&t, 60, .85f);
+        t.ph1 = t.ph2 = 0;
+        t.lfo = 0.f;
+        for (k = 0; k < 16u; k++) {
+            for (i = 0; i < 256u; i++) out[i] = 0;
+            for (i = 0; i < 256u; i += OD_BLK) v_render(&t, out + i, OD_BLK);
+            for (i = 0; i < 256u; i++) acc += (uint32_t)(out[i] < 0 ? -out[i] : out[i]);
+        }
+        st_num(&e, (int32_t)(acc / 4096u));
+    }
+    PS = keep;
+}
+
 static void synth_init(void)
 {
     P.vol = .8f;

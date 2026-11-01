@@ -14,7 +14,7 @@ static uint16_t web_fb[240 * 240];
 EXPORT float *web_out_l(void) { return out_l; }
 EXPORT float *web_out_r(void) { return out_r; }
 EXPORT uint16_t *web_screen(void) { return web_fb; }
-EXPORT void web_init(void) { od_init(); }
+EXPORT void web_init(void) { od_init(); od_selftest(); }
 EXPORT void web_render(uint32_t n)
 {
     uint32_t i;

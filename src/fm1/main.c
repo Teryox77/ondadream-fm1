@@ -287,6 +287,7 @@ static void app_main(void)
         rescue_main();
     boot_stage(4);
     od_init();
+    od_selftest();
     od_frame(fbuf);                             /* the splash */
     boot_stage(5);
     lcd_flush(1);

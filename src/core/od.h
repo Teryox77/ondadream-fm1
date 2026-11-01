@@ -27,7 +27,8 @@ void od_key(uint32_t k, int down);         /* the 27 keys, 0 = the lowest (C) */
 void od_button(uint32_t b, int down);
 void od_enc(uint32_t e, int32_t steps);    /* clockwise > 0 */
 void od_master(uint32_t v);                /* the MASTER pot 0..1023 */
-void od_stats(uint32_t fps, uint32_t cpu); /* the platform's screen rate and audio load (%), shown on GLOBAL */
+void od_stats(uint32_t fps, uint32_t cpu);
+void od_selftest(void);                    /* once, at start (before the audio): GLOBAL shows the result */ /* the platform's screen rate and audio load (%), shown on GLOBAL */
 void od_midi(uint8_t st, uint8_t d1, uint8_t d2);   /* a channel message (USB MIDI, TRS) */
 uint32_t od_leds_keys(void);               /* bit k: key k lit (27 keys) */
 uint32_t od_leds_buttons(void);            /* bit b: button b (OB_*) lit */
