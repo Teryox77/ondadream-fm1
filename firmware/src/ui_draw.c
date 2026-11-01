@@ -1361,28 +1361,93 @@ static void draw_columns(void)
 #ifndef ONDA_VERSION
 #define ONDA_VERSION "v0.2"     /* OndaDream (Teryox77), a Felucca fork */
 #endif
-static const char *const SPLASH_LINES[] = {"OndaDream", ONDA_VERSION, "Teryox77", "on Felucca " FELUCCA_VERSION};
-/* a band of two lines, h tall, at y on the screen: the first line's top at ly; the two lines' capitals declared
- * against al0..al1 (mode: AL_V the band centred there, AL_B the last baseline on al1) */
-static void splash_band(uint32_t y, uint32_t h, int32_t ly, const char *const *l, uint32_t mode, int32_t al0,
-                        int32_t al1, const char *tag)
+/* OndaDream's splash ("B . Onde", Teryox77): on space black, "Onda" / "Dream" large (tools/onda/gen_splash.py: the
+ * texts as 4-bit alpha, from the firmware's own Inter Tight), an orange rule, four waves in the knobs' colours
+ * (blue, green, white, orange) running under a little jelly that rides them, the version in an orange pill, the
+ * author and the credit to Felucca. Fixed colours: the brand's, in every palette. Drawn in two canvases (the top and
+ * the bottom 120 rows: CV_MAX), the same scene in both, cv_oy picking the half. splash_frame(t): the scene at t ms
+ * (the waves and the jelly move); main.c animates it for ONDA_SPLASH_MS, web/emu too. */
+#include "onda_splash.h"
+#define ONDA_SPLASH_MS 1200u
+#define SPL_BG RGB(10, 11, 15)
+static const uint8_t SPL_STARS[][3] = {   /* x, y, brightness 0..3 */
+    {224, 58, 0}, {25, 27, 2}, {68, 42, 0}, {152, 47, 3}, {167, 29, 2}, {234, 6, 2}, {123, 12, 3}, {10, 15, 1},
+    {38, 10, 2}, {232, 32, 2}, {206, 12, 2}, {187, 9, 1}, {93, 8, 3}, {19, 104, 2}, {58, 96, 1}, {212, 98, 2},
+    {226, 214, 1}, {16, 222, 1}, {200, 112, 1}, {44, 118, 1}};
+static void spl_text(int32_t x, int32_t base, uint32_t w, uint32_t h, uint32_t b, const uint8_t *d, uint16_t fg)
 {
-    cv_begin(SPL_SQ, h, T_RAISE);
-    GFX_HOOK_ALIGN(0, al0, 0, al1, mode | AL_N(2), tag);
-    cv_text_on(SPL_PAD, ly, &AF_M, l[0], T_TEXT, T_RAISE);
-    cv_text_on(SPL_PAD, ly + SPL_PITCH, &AF_M, l[1], T_TEXT, T_RAISE);
-    cv_blit(SPL_X0, y);
+    cv_alpha(x, base - (int32_t)b, w, h, d, ramp(fg, SPL_BG));
+}
+/* a sine wave across the screen: centre y, amplitude a, period 120 px, phase ph (0..1023 a turn), 2 px */
+static void spl_wave(int32_t y, int32_t a, uint32_t ph, uint16_t c)
+{
+    int32_t x, py = 0;
+    for (x = 0; x <= 240; x += 3) {
+        int32_t yy = y + (a * SINE[((uint32_t)x * 1024u / 120u + ph) & 1023u] >> 15);
+        if (x)
+            cv_line_t(x - 3, py, x, yy, c, 2);
+        py = yy;
+    }
+}
+static void spl_scene(uint32_t t)
+{
+    static const uint16_t WC[4] = {RGB(62, 123, 255), RGB(0, 200, 120), RGB(232, 235, 239), RGB(255, 122, 26)};
+    static const int8_t WA[4] = {10, 8, 7, 5};
+    static const uint16_t WP[4] = {0, 147, 293, 440};             /* the phases of the design: 0, .9, 1.8, 2.7 rad */
+    uint32_t i, mv = t * 1024u / 2400u;                           /* the waves: one period in 2.4 s */
+    uint16_t orange = RGB(255, 122, 26), purple = RGB(193, 61, 255), white = RGB(237, 240, 244);
+    int32_t jx = 89, jy = 118 + (10 * SINE[((uint32_t)jx * 1024u / 120u + mv) & 1023u] >> 15) / 2;   /* rides wave 1 */
+    for (i = 0; i < NELEM(SPL_STARS); i++) {
+        uint32_t lv = (SPL_STARS[i][2] + (t / 300u + i) % 4u) % 4u;   /* twinkle */
+        static const uint8_t L[4] = {70, 110, 160, 210};
+        cv_pset(SPL_STARS[i][0], SPL_STARS[i][1], RGB(L[lv], L[lv], L[lv] + 8u > 255u ? 255u : L[lv] + 8u));
+    }
+    spl_text((240 - SPL_ONDA_W) / 2, 56, SPL_ONDA_W, SPL_ONDA_H, SPL_ONDA_BASE, SPL_ONDA, white);
+    spl_text((240 - SPL_DREAM_W) / 2, 88, SPL_DREAM_W, SPL_DREAM_H, SPL_DREAM_BASE, SPL_DREAM, white);
+    cv_rrect(78, 97, 84, 2, 1, orange, SPL_BG);
+    for (i = 0; i < 4u; i++)
+        spl_wave(138 + (int32_t)i * 7, WA[i], WP[i] + mv, WC[i]);
+    /* the jelly: a dome, its rim, four tentacles that sway, two eyes */
+    {
+        int32_t k, px = 0, py = 0, sw = SINE[(t * 1024u / 900u) & 1023u] * 2 >> 15;
+        for (k = 0; k <= 16; k++) {
+            uint32_t a = 512u + (uint32_t)k * 512u / 16u;
+            int32_t x = jx + (13 * SINE[(a + 256u) & 1023u] >> 15), y = jy + (12 * SINE[a & 1023u] >> 15);
+            if (k)
+                cv_line_t(px, py, x, y, purple, 2);
+            px = x;
+            py = y;
+        }
+        cv_rect(jx - 13, jy, 27, 2, purple);
+        for (k = 0; k < 4; k++) {
+            int32_t tx = jx - 9 + k * 6, s = (k & 1) ? sw : -sw;
+            cv_line(tx, jy + 2, tx + s, jy + 6, RGB(233, 184, 255));
+            cv_line(tx + s, jy + 6, tx - s, jy + 11, RGB(233, 184, 255));
+        }
+        cv_rect(jx - 5, jy - 6, 2, 2, white);
+        cv_rect(jx + 3, jy - 6, 2, 2, white);
+    }
+    /* the version in an orange pill, the author, the credit */
+    cv_rrect(18, 196, 34, 17, 8, orange, SPL_BG);
+    cv_rrect(19, 197, 32, 15, 7, SPL_BG, orange);
+    spl_text(35 - SPL_VER_W / 2, 208, SPL_VER_W, SPL_VER_H, SPL_VER_BASE, SPL_VER, orange);
+    spl_text(222 - SPL_AUTHOR_W, 204, SPL_AUTHOR_W, SPL_AUTHOR_H, SPL_AUTHOR_BASE, SPL_AUTHOR, white);
+    spl_text(222 - SPL_CREDIT_W, 216, SPL_CREDIT_W, SPL_CREDIT_H, SPL_CREDIT_BASE, SPL_CREDIT, RGB(138, 144, 153));
+}
+static void splash_frame(uint32_t t)
+{
+    uint32_t half;
+    for (half = 0; half < 2u; half++) {
+        cv_begin(240, 120, SPL_BG);
+        cv_oy = -(int32_t)half * 120;
+        spl_scene(t);
+        cv_oy = 0;
+        cv_blit(0, half * 120u);
+    }
 }
 static void draw_splash(void)
 {
-    int32_t h = SPL_PAD - AF_M_CAP_Y + SPL_PITCH + AF_M.h;     /* a band: its two lines, the descenders in */
-    int32_t lb = h - SPL_PAD - AF_M_CAP_H - AF_M_CAP_Y;         /* the bottom band's last line: its top */
-    lcd_fill(0, 0, 240, 240, T_BG);
-    lcd_fill(SPL_X0, SPL_X0, SPL_SQ, SPL_SQ, T_RAISE);
-    splash_band(SPL_X0, (uint32_t)h, SPL_PAD - AF_M_CAP_Y, SPLASH_LINES, AL_V, SPL_PAD,
-                SPL_PAD + SPL_PITCH + AF_M_CAP_H, "splash name + version SPL_PAD from the top");
-    splash_band(SPL_X0 + SPL_SQ - (uint32_t)h, (uint32_t)h, lb - SPL_PITCH, SPLASH_LINES + 2, AL_B, 0, h - SPL_PAD,
-                "splash maker's baseline SPL_PAD from the bottom");
+    splash_frame(0);
     lcd_sync();
 }
 

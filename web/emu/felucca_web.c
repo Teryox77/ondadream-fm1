@@ -259,6 +259,7 @@ static void cdc_task(void) {}
 
 /* --------------------------------------------------------- the device --- */
 static uint32_t web_booted, web_boot_ms, web_last_frame;
+static uint32_t web_splash_t0;           /* OndaDream: the animated splash's start (main.c) */
 
 /* main.c fm1_main's boot, up to the main loop (no USB, no UART, no panel setup) */
 static void web_power_on(void)
@@ -279,7 +280,8 @@ static void web_power_on(void)
     audio_init();
     boot_leds();                          /* main.c: the power-on LED sweep, from the scan's start */
     autosave_boot(boot_clean);            /* main.c: the last session's music (1.2, project.c) */
-    web_boot_ms = fm1_ms + 430u;         /* main.c: 30 + 400 ms before the first frame */
+    web_boot_ms = fm1_ms + 30u + ONDA_SPLASH_MS;   /* main.c: 30 ms + the splash before the first frame */
+    web_splash_t0 = fm1_ms + 30u;
     web_booted = 1;
 }
 
@@ -320,6 +322,12 @@ static void web_ms(void)
             ring[i + 1] = (float)o[2u * k + 1u] / 8388608.0f;
         }
         web_half ^= 1u;
+    }
+    if (web_booted && web_boot_ms && (int32_t)(fm1_ms - web_boot_ms) < 0) {   /* main.c: the splash, animated */
+        uint32_t t = fm1_ms - web_splash_t0;
+        if ((int32_t)t >= 0 && t % 40u == 0u)
+            splash_frame(t);
+        return;
     }
     if (!web_booted || (int32_t)(fm1_ms - web_boot_ms) < 0)
         return;
