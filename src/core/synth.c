@@ -41,16 +41,22 @@ static float od_exp2(float x)
     r.u += (uint32_t)i << 23;
     return r.f;
 }
-static float od_log2(float x)            /* x > 0: the exponent, then a polynomial on [1, 2) */
+static float od_log2(float x)            /* x > 0: the exponent, then 2/ln2 atanh((m-1)/(m+1)) for the mantissa m */
 {
     union { float f; uint32_t u; } r;
-    float m;
+    float m, t, t2;
     int32_t e;
     r.f = x;
     e = (int32_t)((r.u >> 23) & 255u) - 127;
-    r.u = (r.u & 0x007FFFFFu) | 0x3F800000u;
+    r.u = (r.u & 0x007FFFFFu) | 0x3F800000u;     /* m in [1, 2) */
     m = r.f;
-    return (float)e + (-1.7417939f + (2.8212026f + (-1.4699568f + (0.44717955f - 0.056570851f * m) * m) * m) * m);
+    if (m > 1.41421356f) {                       /* [0.707, 1.414): the series converges faster */
+        m *= .5f;
+        e++;
+    }
+    t = (m - 1.f) / (m + 1.f);
+    t2 = t * t;
+    return (float)e + 2.88539008f * t * (1.f + t2 * (.333333333f + t2 * (.2f + t2 * (.142857143f + t2 * .111111111f))));
 }
 static float od_tan(float x)             /* 0 <= x <= 1.35: a Pade fit */
 {
@@ -599,7 +605,8 @@ static void preset_load(int i)
     set_arp_pattern(p->arpPattern);
 }
 /* a self-test of the arithmetic the voices use, run once at start: GLOBAL shows it (the FM-1 against the computer) */
-static char od_test_txt[48];
+static char od_test_txt[64];
+static void (*ui_selftest_fn)(char **e);
 static void st_num(char **e, int32_t v)
 {
     char b[12];
@@ -655,6 +662,7 @@ void od_selftest(void)
         P = keepP;
         preset_idx = keepi;
     }
+    if (ui_selftest_fn) ui_selftest_fn(&e);
     PS = keep;
 }
 

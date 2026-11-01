@@ -674,12 +674,20 @@ static void dr_mod(float W, float H, uint32_t now)
     e = cat(b, "VIB "); e = fmt_i(e, (int32_t)(P.lfoPitch + .5f)); cat(e, " ct");
     label(b, W - 76, 16, viz.a2);
 }
+static void ui_selftest(char **e)             /* the cutoff knob's mapping, there and back (synth.c od_selftest) */
+{
+    static volatile float c = 2200.f, v = .5f;
+    float u = exp_unmap(c, 40.f, 16000.f);
+    st_num(e, (int32_t)(u * 1000.f));                             /* 668 */
+    st_num(e, (int32_t)exp_map(v, 40.f, 16000.f));               /* 800 */
+    st_num(e, (int32_t)exp_map(u + 1.f / 128.f, 40.f, 16000.f)); /* one step up from 2200 */
+}
 static uint32_t st_fps, st_cpu;
 void od_stats(uint32_t fps, uint32_t cpu) { st_fps = fps; st_cpu = cpu; }
 static void dr_glo(float W, float H)
 {
     static const char *const K[9] = {"FIRMWARE", "ENGINE", "VOICES", "VOLUME", "OCTAVE", "HOLD", "ARP AI", "SCREEN", "TEST"};
-    char v[9][48];
+    char v[9][64];
     int i;
     (void)W; (void)H;
     cat(cat(v[0], "ONDADREAM "), OD_VERSION);
@@ -865,6 +873,7 @@ static void preset_go(int i)
 }
 void od_init(void)
 {
+    ui_selftest_fn = ui_selftest;
     pal_init();
     stars_init();
     synth_init();
