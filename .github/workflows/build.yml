@@ -1,5 +1,5 @@
-# OndaDream: on every push to main, build the FM-1 package (.fwsc) with the JieLi toolchain, the browser
-# emulator, and the site (installer + emulator + editor) on GitHub Pages; the package goes to the release "latest".
+# OndaDream: on every push to main, build the FM-1 package with the JieLi toolchain and the browser emulator, publish
+# the site (installer + emulator) on GitHub Pages and the package as the release "latest".
 name: build
 
 on:
@@ -25,12 +25,18 @@ jobs:
       - name: Packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang lld python3-pil python3-fonttools xz-utils
+          sudo apt-get install -y clang lld python3-fonttools python3-pil xz-utils
+          pip3 install --break-system-packages lz4 fonttools pillow
 
       - name: JieLi toolchain
         run: |
-          for i in 1 2 3; do tools/get_toolchain.sh && break; echo "retry $i"; sleep 20; done
+          mkdir -p "$HOME/.jieli"
+          for i in 1 2 3; do curl -fL --retry 3 https://pkgman.jieliapp.com/s/linux-toolchain | tar -xJ -C "$HOME/.jieli" && break; echo "retry $i"; sleep 20; done
+          TC="$(ls -d "$HOME"/.jieli/jieli-linux-toolchains-* | sort | tail -1)"
+          ln -sfn "$TC" "$HOME/.jieli/toolchain"
           test -x "$HOME/.jieli/toolchain/pi32v2/bin/clang"
+          echo "JIELI_TOOLCHAIN=$HOME/.jieli/toolchain" >> "$GITHUB_ENV"
+          echo "--- runtime libraries in the toolchain:"; find -L "$HOME/.jieli/toolchain" -name "*.a" | grep -iv "x86\|host" | head -40
 
       - name: JieLi AC79 SDK (three files of it)
         run: |
@@ -46,46 +52,52 @@ jobs:
             echo "retry $i"; sleep 30
           done
           ls -la "$SDK/cpu/wl82/tools/uboot.boot" "$SDK/cpu/wl82/tools/cfg_tool.bin" "$SDK/cpu/wl82/tools/cfg/eq_cfg_hw.bin"
+          echo "AC79_SDK=$SDK" >> "$GITHUB_ENV"
 
-      - name: Build the firmware
-        run: ./build.sh
-
-      - name: Package
+      - name: Tests on the computer (sound of every preset, every page)
         run: |
-          VER=$(sed -n 's/^#define ONDA_VERSION "\([^"]*\)".*/\1/p' firmware/src/ui_draw.c | head -n 1)
-          mkdir -p dist
-          cp build/felucca.fwsc "dist/ondadream-${VER}.fwsc"
-          (cd dist && sha256sum *.fwsc > SHA256SUMS)
+          gcc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/core -Isrc/gen tests/synth_test.c -lm -o /tmp/synth_test && /tmp/synth_test
+          gcc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/core -Isrc/gen tests/ui_test.c -lm -o /tmp/ui_test && /tmp/ui_test
+
+      - name: Firmware
+        run: |
+          VER=$(sed -n 's/^#define OD_VERSION "v\([^"]*\)".*/\1/p' src/core/od.h)
           echo "VER=$VER" >> "$GITHUB_ENV"
-          ls -la dist
+          python3 tools/build_fm1.py --version "$VER"
+          mkdir -p dist
+          cp "build/fm1/ondadream-$VER.fwsc" dist/
+          (cd dist && sha256sum *.fwsc > SHA256SUMS)
 
       - name: Browser emulator
-        run: tools/onda/build_emu.sh
+        run: tools/build_web.sh
 
-      - name: Site (installer, editor, emulator)
+      - name: Site
         run: |
-          python3 web/make_site.py "dist/ondadream-${VER}.fwsc" "${VER#v}" site
+          python3 installer/make_installer.py "dist/ondadream-$VER.fwsc" "$VER" site
           mkdir -p site/webapp/try
-          cp -r build/emu/* site/webapp/try/
+          cp build/web/* site/webapp/try/
           cat > site/index.html <<'HTML'
           <!doctype html><meta charset="utf-8"><title>OndaDream</title>
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <style>body{font:16px/1.6 -apple-system,system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;background:#141518;color:#e6e8eb}a{color:#ff7a1a}</style>
           <h1>OndaDream</h1>
-          <p>Firmware per M-VAVE FM-1 (fork di Felucca).</p>
+          <p>Firmware per M-VAVE FM-1 · © 2026 Teryox77</p>
           <ul>
           <li><a href="webapp/try/">Provalo nel browser (emulatore)</a></li>
           <li><a href="webapp/installer/">Installa sull'FM-1 (Chrome o Edge, USB)</a></li>
-          <li><a href="webapp/editor/">Editor</a></li>
-          <li><a href="https://github.com/Teryox77/ondadream-fm1">Codice sorgente</a></li>
+          <li><a href="https://github.com/Teryox77/ondadream-fm1">Codice e licenze</a></li>
           </ul>
           HTML
 
-      - name: Upload the package
+      - name: Upload the build
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ondadream-fwsc
-          path: dist/
+          name: ondadream-build
+          path: |
+            dist/
+            build/fm1/app/ondadream.sym
+            build/fm1/app/ondadream.dis
 
       - name: Release "latest"
         env:

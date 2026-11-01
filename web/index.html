@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<!-- OndaDream firmware. Copyright (C) 2026 Teryox77. All rights reserved. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OndaDream — FM-1 firmware (emulator)</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{min-height:100%;overscroll-behavior:none}
+  body{background:#141518;font-family:-apple-system,system-ui,"Segoe UI",sans-serif;-webkit-user-select:none;user-select:none;
+       color:#e6e8eb;display:flex;flex-direction:column;align-items:center;padding:16px 8px 28px;gap:14px;overflow-x:hidden}
+  .intro{max-width:830px;width:100%;text-align:center}
+  .intro h1{font:400 16px "Silkscreen",monospace;letter-spacing:2px}
+  .intro h1 b{color:#ff7a1a;font-weight:400}
+  .intro p{font-size:12px;color:#9a9ea5;margin-top:4px;line-height:1.45}
+
+  /* contenitore che scala il synth per farlo stare nello schermo */
+  #stage{width:100%;max-width:830px;position:relative}
+  #device{width:830px;height:560px;transform-origin:0 0;position:absolute;left:0;top:0;
+    border-radius:30px;background:linear-gradient(180deg,#5b5d62 0%,#4b4d52 55%,#44464b 100%);
+    box-shadow:inset 0 2px 1px rgba(255,255,255,.18),inset 0 -6px 18px rgba(0,0,0,.35),0 22px 50px rgba(0,0,0,.6)}
+  .lbl{position:absolute;font:600 11px -apple-system,system-ui,"Segoe UI",sans-serif;letter-spacing:.4px;color:#e9eaec;text-align:center;width:90px;margin-left:-45px}
+
+  /* manopole */
+  .enc{position:absolute;width:58px;height:58px;margin:-29px 0 0 -29px;border-radius:50%;cursor:ns-resize;touch-action:none;
+    background:radial-gradient(circle at 40% 32%,#3b3d41 0,#232427 55%,#151618 100%);
+    box-shadow:0 0 0 3px #2a2b2e,0 3px 0 4px #1d1e20,0 8px 14px rgba(0,0,0,.45),inset 0 1px 1px rgba(255,255,255,.12)}
+  .enc .ind{position:absolute;inset:0;transition:transform .04s}
+  .enc .ind::after{content:"";position:absolute;left:50%;top:6px;width:3px;height:16px;margin-left:-1.5px;border-radius:2px;background:#f2f3f4}
+  .enc.small{width:46px;height:46px;margin:-23px 0 0 -23px}
+  .enc.small .ind::after{top:5px;height:13px}
+
+  /* pulsanti */
+  .panel{position:absolute;background:#2f3034;border-radius:10px;box-shadow:inset 0 1px 3px rgba(0,0,0,.6),0 1px 0 rgba(255,255,255,.08)}
+  .btn{position:absolute;width:42px;height:42px;border-radius:7px;cursor:pointer;
+    background:linear-gradient(180deg,#5d5f64,#4d4f54);box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 2px 0 #26272a,0 3px 5px rgba(0,0,0,.4);
+    font:600 10px -apple-system,system-ui,sans-serif;color:#e6e7ea;display:flex;align-items:center;justify-content:center;letter-spacing:.3px}
+  .btn:active,.btn.press{transform:translateY(1px);box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 1px 0 #26272a}
+  .btn.led{box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 2px 0 #26272a,0 0 0 1px #9be27a,0 0 10px rgba(130,230,110,.55)}
+  .btn.wide{width:72px;height:30px;border-radius:6px}
+
+  /* schermo */
+  #bezel{position:absolute;left:246px;top:56px;width:332px;height:330px;border-radius:16px;background:#0b0b0d;
+    box-shadow:0 0 0 3px #1b1c1f,inset 0 0 0 2px #050506,0 4px 10px rgba(0,0,0,.5)}
+  #screen{position:absolute;left:14px;top:13px;width:304px;height:304px;image-rendering:pixelated;image-rendering:crisp-edges;touch-action:none;border-radius:2px;background:#000}
+  #silk{position:absolute;left:246px;top:392px;width:332px;text-align:center;font:600 6px -apple-system,system-ui,sans-serif;letter-spacing:1px;color:#8d9096}
+
+  /* tastiera in silicone */
+  #keybed{position:absolute;left:44px;top:396px;width:742px;height:148px;border-radius:14px;background:#2a2b2e;
+    box-shadow:inset 0 2px 5px rgba(0,0,0,.6),0 1px 0 rgba(255,255,255,.07)}
+  .key{position:absolute;width:40px;height:60px;border-radius:20px;cursor:pointer;touch-action:none;
+    background:linear-gradient(90deg,#5a4448 0%,#6e5357 45%,#5d4649 100%);box-shadow:inset 0 -3px 4px rgba(0,0,0,.35),0 2px 3px rgba(0,0,0,.35)}
+  .key::after{content:"";position:absolute;left:50%;top:14px;bottom:14px;width:3px;margin-left:-1.5px;border-radius:2px;background:rgba(235,226,228,.75)}
+  .key.on{background:linear-gradient(90deg,#c6833f 0%,#e9a75a 45%,#c98640 100%);box-shadow:0 0 14px rgba(240,160,70,.6),inset 0 -3px 4px rgba(0,0,0,.25)}
+  .key.on::after{background:#fff4e2}
+
+  .help{max-width:830px;width:100%;font-size:12px;color:#9a9ea5;line-height:1.55;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
+  .help div{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:10px;padding:10px 12px}
+  .help b{color:#e6e8eb}
+  kbd{font:700 10px ui-monospace,Menlo,monospace;background:#2c2f34;border:1px solid #444;border-bottom-width:2px;border-radius:4px;padding:0 4px;color:#e6e8eb}
+
+  #start{position:absolute;left:246px;top:56px;width:332px;height:330px;border-radius:16px;border:0;cursor:pointer;
+    background:rgba(10,11,15,.55);color:#ff7a1a;font:700 15px -apple-system,system-ui,sans-serif;letter-spacing:1px;z-index:5}
+  #start.gone{display:none}
+  .enc.master{background:radial-gradient(circle at 40% 32%,#4a4c50 0,#2a2b2e 55%,#18191b 100%)}
+</style>
+</head>
+<body>
+<div class="intro">
+  <h1 style="font:800 16px -apple-system,system-ui,sans-serif;letter-spacing:3px">ONDA<b>DREAM</b> · FM-1 FIRMWARE</h1>
+  <p>The firmware's own code, running in your browser on a model of the FM-1's panel. Press the screen to switch on.</p>
+</div>
+
+<div id="stage">
+<div id="device">
+  <div class="lbl" style="left:96px;top:64px">MASTER</div>
+  <div class="enc master" id="e-master" style="left:96px;top:118px"><div class="ind"></div></div>
+  <div class="lbl" style="left:182px;top:64px">SELECT</div>
+  <div class="enc" id="e-0" style="left:182px;top:118px"><div class="ind"></div></div>
+  <div class="lbl" style="left:96px;top:170px">PRESETS</div>
+  <div class="enc" id="e-2" style="left:96px;top:226px"><div class="ind"></div></div>
+  <div class="lbl" style="left:182px;top:170px">ALGORITHM</div>
+  <div class="enc" id="e-1" style="left:182px;top:226px"><div class="ind"></div></div>
+  <div class="panel" style="left:54px;top:288px;width:166px;height:44px"></div>
+  <div class="btn wide" id="b-12" style="left:62px;top:295px">OCT-</div>
+  <div class="btn wide" id="b-13" style="left:140px;top:295px">OCT+</div>
+
+  <div id="bezel"><canvas id="screen" width="240" height="240"></canvas></div>
+  <button id="start">SWITCH ON</button>
+  <div id="silk">ONDADREAM · FIRMWARE FOR M-VAVE FM-1</div>
+
+  <div class="lbl" style="left:618px;top:72px">KNOB1</div>
+  <div class="enc small" id="e-3" style="left:618px;top:118px"><div class="ind"></div></div>
+  <div class="lbl" style="left:676px;top:72px">KNOB2</div>
+  <div class="enc small" id="e-4" style="left:676px;top:118px"><div class="ind"></div></div>
+  <div class="lbl" style="left:734px;top:72px">KNOB3</div>
+  <div class="enc small" id="e-5" style="left:734px;top:118px"><div class="ind"></div></div>
+  <div class="lbl" style="left:792px;top:72px">KNOB4</div>
+  <div class="enc small" id="e-6" style="left:792px;top:118px"><div class="ind"></div></div>
+  <div class="panel" style="left:592px;top:180px;width:224px;height:110px"></div>
+  <div id="keybed"></div>
+</div>
+</div>
+
+<div class="help">
+  <div><b>Panel</b><br><b>PRESETS</b> sound · <b>SELECT</b> page · <b>ALGORITHM</b> waveform · <b>KNOB1–4</b> the page's four values · <b>MASTER</b> volume. Drag up/down or use the wheel.</div>
+  <div><b>Buttons</b><br><b>HOME</b> scene · <b>EDIT</b> filter · <b>ENV</b> envelope · <b>LFO</b> modulation · <b>ARP</b> arpeggiator · <b>FX</b> effects · <b>GLO</b> global · <b>SCL</b> hold · <b>REC</b> arp AI · <b>OCT−/+</b>.</div>
+  <div><b>Play</b><br>The keys, or the computer keyboard: <kbd>A</kbd> = F, <kbd>W</kbd> <kbd>S</kbd> <kbd>E</kbd> <kbd>D</kbd> <kbd>R</kbd> <kbd>F</kbd> <kbd>G</kbd> … upwards; <kbd>Z</kbd>/<kbd>X</kbd> octave; <kbd>←</kbd>/<kbd>→</kbd> preset. A USB MIDI keyboard works too where the browser allows it.</div>
+</div>
+<p style="font-size:11px;color:#6d727a;max-width:830px;text-align:center">OndaDream © 2026 Teryox77, all rights reserved. M-VAVE and FM-1 are trademarks of their owners; OndaDream is not affiliated with them.</p>
+
+<script>
+"use strict";
+const BTN = [["FX","SCL","ENV","LFO","EDIT","GLO"],["HOME","SAVE","ARP","SEQ","PLAY","REC"]];
+const BTN_ID = {FX:0,SCL:1,ENV:2,LFO:3,EDIT:4,GLO:5,HOME:6,SAVE:7,ARP:8,SEQ:9,PLAY:10,REC:11};
+let X = null, ac = null, node = null, lastT = performance.now(), started = false;
+const scr = document.getElementById("screen"), g = scr.getContext("2d"), img = g.createImageData(240, 240);
+
+function stageScale(){const st=document.getElementById("stage");return Math.min(1,st.clientWidth/830);}
+function fitStage(){const s=stageScale();document.getElementById("device").style.transform=`scale(${s})`;document.getElementById("stage").style.height=(560*s)+"px";}
+window.addEventListener("resize",fitStage);fitStage();
+
+async function load(){
+  const r = await fetch("ondadream.wasm");
+  const { instance } = await WebAssembly.instantiate(await r.arrayBuffer(), {});
+  X = instance.exports;
+  X._initialize();
+  X.web_init();
+  X.web_master(1023);
+  requestAnimationFrame(loop);
+}
+function startAudio(){
+  if (started) return;
+  started = true;
+  document.getElementById("start").classList.add("gone");
+  try {
+    ac = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 44100});
+  } catch (e) { ac = new (window.AudioContext || window.webkitAudioContext)(); }
+  node = ac.createScriptProcessor(1024, 0, 2);
+  node.onaudioprocess = (ev) => {
+    const L = ev.outputBuffer.getChannelData(0), R = ev.outputBuffer.getChannelData(1);
+    for (let o = 0; o < L.length; o += 512) {
+      const n = Math.min(512, L.length - o);
+      X.web_render(n);
+      L.set(new Float32Array(X.memory.buffer, X.web_out_l(), n), o);
+      R.set(new Float32Array(X.memory.buffer, X.web_out_r(), n), o);
+    }
+  };
+  node.connect(ac.destination);
+  ac.resume();
+}
+document.getElementById("start").addEventListener("click", () => { if (X) startAudio(); });
+
+function loop(t){
+  if (!started) X.web_idle(Math.min(100, Math.max(0, Math.round(t - lastT))));
+  lastT = t;
+  X.web_frame();
+  const fb = new Uint16Array(X.memory.buffer, X.web_screen(), 240 * 240), d = img.data;
+  for (let i = 0, j = 0; i < 57600; i++, j += 4) {
+    const v = fb[i];
+    d[j] = (v >> 11) << 3; d[j + 1] = ((v >> 5) & 63) << 2; d[j + 2] = (v & 31) << 3; d[j + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  const lk = X.web_leds_keys(), lb = X.web_leds_buttons();
+  keyEls.forEach((el, k) => el.classList.toggle("on", !!((lk >>> k) & 1)));
+  for (const [name, id] of Object.entries(BTN_ID)) btnEls[name].classList.toggle("led", !!((lb >>> id) & 1));
+  requestAnimationFrame(loop);
+}
+
+/* encoders: drag or wheel; one step a 14 px drag or a wheel notch */
+let masterV = 1023;
+function wireEnc(el, fn){
+  let y = null, acc = 0, ang = 0;
+  const turn = (s) => { ang += s * 18; el.querySelector(".ind").style.transform = `rotate(${ang}deg)`; fn(s); };
+  el.addEventListener("pointerdown", (e) => { y = e.clientY; acc = 0; el.setPointerCapture(e.pointerId); e.preventDefault(); if (X) startAudio(); });
+  el.addEventListener("pointermove", (e) => { if (y === null) return; acc += (y - e.clientY) / stageScale(); y = e.clientY;
+    while (acc >= 14) { acc -= 14; turn(1); } while (acc <= -14) { acc += 14; turn(-1); } });
+  const end = () => { y = null; };
+  el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
+  el.addEventListener("wheel", (e) => { e.preventDefault(); turn(e.deltaY < 0 ? 1 : -1); }, {passive: false});
+}
+for (let i = 0; i < 7; i++) wireEnc(document.getElementById("e-" + i), (s) => X && X.web_enc(i, s));
+wireEnc(document.getElementById("e-master"), (s) => { masterV = Math.max(0, Math.min(1023, masterV + s * 48)); X && X.web_master(masterV);
+  document.querySelector("#e-master .ind").style.transform = `rotate(${-135 + masterV / 1023 * 270}deg)`; });
+document.querySelector("#e-master .ind").style.transform = "rotate(135deg)";
+
+/* buttons */
+const btnEls = {};
+const dev = document.getElementById("device");
+BTN.forEach((row, r) => row.forEach((name, c) => {
+  const b = document.createElement("div"); b.className = "btn"; b.textContent = name;
+  b.style.left = (598 + c * 36) + "px"; b.style.top = (188 + r * 50) + "px"; b.style.width = "33px";
+  b.addEventListener("pointerdown", (e) => { e.preventDefault(); if (X) { startAudio(); X.web_button(BTN_ID[name], 1); } });
+  b.addEventListener("pointerup", () => X && X.web_button(BTN_ID[name], 0));
+  dev.appendChild(b); btnEls[name] = b;
+}));
+for (const id of [12, 13]) {
+  const b = document.getElementById("b-" + id);
+  b.addEventListener("pointerdown", (e) => { e.preventDefault(); if (X) { startAudio(); X.web_button(id, 1); } });
+  b.addEventListener("pointerup", () => X && X.web_button(id, 0));
+}
+
+/* the 27 keys: F3 .. G5; 16 below, 11 above */
+const WHITE = [0,2,4,6,7,9,11,12,14,16,18,19,21,23,24,26], BLACK = [1,3,5,8,10,13,15,17,20,22,25];
+const keyEls = new Map(), ptrKey = new Map();
+const bed = document.getElementById("keybed"), step = (742 - 16) / 16;
+function mkKey(k, left, top){
+  const el = document.createElement("div"); el.className = "key"; el.style.left = left + "px"; el.style.top = top + "px";
+  el.addEventListener("pointerdown", (e) => { e.preventDefault(); el.releasePointerCapture?.(e.pointerId); if (!X) return; startAudio(); ptrKey.set(e.pointerId, k); X.web_key(k, 1); });
+  el.addEventListener("pointerenter", (e) => { if (e.buttons !== 1 || !ptrKey.has(e.pointerId)) return; const o = ptrKey.get(e.pointerId); if (o === k) return; X.web_key(o, 0); ptrKey.set(e.pointerId, k); X.web_key(k, 1); });
+  bed.appendChild(el); keyEls.set(k, el);
+}
+WHITE.forEach((k, i) => mkKey(k, 8 + i * step + (step - 40) / 2, 78));
+BLACK.forEach((k) => { const wi = WHITE.indexOf(k - 1); mkKey(k, 8 + (wi + 1) * step - 20, 10); });
+const endPtr = (e) => { if (ptrKey.has(e.pointerId)) { X.web_key(ptrKey.get(e.pointerId), 0); ptrKey.delete(e.pointerId); } };
+window.addEventListener("pointerup", endPtr); window.addEventListener("pointercancel", endPtr);
+
+/* the computer keyboard */
+const PC = {a:0,w:1,s:2,e:3,d:4,r:5,f:6,g:7,y:8,h:9,u:10,j:11,k:12,o:13,l:14,p:15,";":16,"'":18};
+const down = new Set();
+window.addEventListener("keydown", (e) => {
+  if (!X || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === "z") { startAudio(); X.web_button(12, 1); return; }
+  if (k === "x") { startAudio(); X.web_button(13, 1); return; }
+  if (k === "arrowleft") { X.web_enc(2, -1); return; }
+  if (k === "arrowright") { X.web_enc(2, 1); return; }
+  if (k in PC && !down.has(k)) { startAudio(); down.add(k); X.web_key(PC[k], 1); }
+});
+window.addEventListener("keyup", (e) => { const k = e.key.toLowerCase(); if (down.has(k)) { down.delete(k); X.web_key(PC[k], 0); } });
+
+/* a MIDI keyboard, where the browser allows it */
+if (navigator.requestMIDIAccess) navigator.requestMIDIAccess().then((acc) => {
+  const hook = () => { for (const i of acc.inputs.values()) i.onmidimessage = (m) => { if (!X) return; startAudio(); X.web_midi(m.data[0], m.data[1] || 0, m.data[2] || 0); }; };
+  hook(); acc.onstatechange = hook;
+}).catch(() => {});
+
+load();
+</script>
+</body>
+</html>

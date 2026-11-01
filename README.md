@@ -1,38 +1,47 @@
 # OndaDream — firmware per M-VAVE FM-1
 
-**OndaDream** è un firmware per il sintetizzatore tascabile **M-VAVE FM-1**, nato dal synth web OndaDream di Teryox77.
-È un fork di **[Felucca](https://github.com/hugelton/Felucca)** di Leo Kuroshita (Hügelton Instruments), da cui eredita
-motori sonori, sequencer, effetti, installer ed editor.
+Un sintetizzatore tutto nuovo per l'FM-1: 43 preset, creature animate sullo schermo, pagine FILTER, ENVELOPE, LFO,
+ARPEGGIO (con modalità AI), EFFECTS (chorus, eco, riverbero) e GLOBAL, comandate da manopole e tasti dell'FM-1.
 
 - **Provalo nel browser:** https://teryox77.github.io/ondadream-fm1/webapp/try/
 - **Installalo sull'FM-1** (Chrome o Edge, cavo USB dati): https://teryox77.github.io/ondadream-fm1/webapp/installer/
-- **Scarica il pacchetto `.fwsc`:** [release "latest"](https://github.com/Teryox77/ondadream-fm1/releases/tag/latest)
+- **Il file del firmware:** [release "latest"](https://github.com/Teryox77/ondadream-fm1/releases/tag/latest)
 
-## Cosa c'è nella v0.1
+Se dopo l'installazione l'FM-1 non parte, due accensioni fallite di fila lo mettono da solo in modalità di
+aggiornamento (UBOOT): da lì si reinstalla dalla stessa pagina, oppure si rimette il firmware originale M-VAVE.
 
-- I **42 suoni di OndaDream** come primi preset del motore ANALOG (poi quelli originali di Felucca).
-- **4 tracce all'accensione**: PAD SOGNO, BASSO CALDO, PLUCK (ANALOG) e la **batteria 808**, ognuna col suo pattern: premi PLAY.
-- La **creatura** sullo schermo HOME al posto dell'oscilloscopio: diversa per ogni suono, reagisce alle note.
-- Schermata di avvio OndaDream.
+## Comandi
 
-## Tornare indietro
+| Controllo | Funzione |
+| --- | --- |
+| PRESETS | cambia suono (43) |
+| SELECT | scorre le pagine |
+| ALGORITHM | forma d'onda |
+| KNOB 1–4 | i quattro valori della pagina (le card colorate in basso) |
+| MASTER | volume |
+| HOME · EDIT · ENV · LFO · ARP · FX · GLO | le pagine |
+| SCL | HOLD |
+| REC | arpeggio AI |
+| OCT− / OCT+ | ottava |
 
-L'installer di Felucca/OndaDream ha "Return to official V15", oppure usa l'updater ufficiale M-VAVE.
-Installare firmware personalizzati è a tuo rischio.
+SEQ, PLAY e SAVE arrivano con la prossima versione (sequencer a 4 tracce con batteria 808).
 
-## Compilazione
+## Struttura
 
-Ogni push su `main` compila tutto su GitHub Actions (`.github/workflows/build.yml`): il pacchetto con la toolchain
-JieLi, l'emulatore (`tools/onda/build_emu.sh`, clang + WASI) e il sito su GitHub Pages.
-In locale: vedi [BUILDING.md](BUILDING.md) di Felucca. Senza toolchain JieLi: `tools/onda/gen.sh` e poi
-`tools/onda/build_emu.sh` per l'emulatore.
+| Cartella | Cosa |
+| --- | --- |
+| `src/core/` | il synth, la grafica, l'interfaccia: lo stesso codice gira sull'FM-1 e nel browser |
+| `src/fm1/` | la piattaforma FM-1 (sopra felucca-bsp) |
+| `bsp/` | felucca-bsp, lo strato hardware (MPL-2.0) |
+| `web/` | l'emulatore nel browser (WebAssembly) |
+| `installer/` | la pagina di installazione (da Felucca, GPL-3.0) |
+| `tools/` | generatori (tabelle, preset, font) e build |
+| `tests/` | test sul computer: suono di tutti i preset, schermate di tutte le pagine |
 
-Modifiche rispetto a Felucca: `firmware/src/creature.c` (nuovo), `firmware/src/ui_graph.c` (HOME),
-`firmware/engines/src/eng_analog.c` (preset), `firmware/src/engines.c` (tracce all'accensione),
-`firmware/src/ui_draw.c` (splash), `web/emu/index.html`, `tools/onda/`.
+Build: GitHub Actions (`.github/workflows/build.yml`) con il toolchain JieLi.
 
 ## Licenza
 
-GPL-3.0, come Felucca (vedi [LICENSE](LICENSE), [LICENSING.md](LICENSING.md), [CREDITS.md](CREDITS.md)).
-Il README originale di Felucca è in [README-FELUCCA.md](README-FELUCCA.md).
-M-VAVE e FM-1 sono marchi dei rispettivi proprietari; OndaDream e Felucca non sono affiliati con loro.
+© 2026 Teryox77, tutti i diritti riservati ([LICENSE](LICENSE)). Le parti di terzi mantengono le loro licenze
+([NOTICE](NOTICE)): felucca-bsp (MPL-2.0), l'installer di Felucca (GPL-3.0), i file dell'SDK JieLi nel pacchetto
+(Apache-2.0), i font (SIL OFL 1.1). M-VAVE e FM-1 sono marchi dei rispettivi proprietari.

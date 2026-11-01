@@ -1,0 +1,16 @@
+OndaDream — third-party parts and their licences
+
+felucca-bsp (bsp/), Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments, and contributors
+  Mozilla Public License 2.0 (LICENSES/MPL-2.0-felucca-bsp.txt). The hardware layer of the firmware: boot, LCD,
+  key scan, audio, USB-MIDI, the update session and the update loader. Source: https://github.com/hugelton/felucca-bsp
+  and bsp/ here. src/fm1/fm1_glue.c and src/fm1/app.ld are adapted from its examples/hwtest and stay MPL-2.0.
+
+Felucca web installer (installer/), Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments
+  GNU GPL 3.0 (LICENSES/GPL-3.0-installer.txt). A separate tool: the page that installs the package over USB-MIDI.
+  Changed for OndaDream (names, credits, no editor). Source: https://github.com/hugelton/Felucca and installer/ here.
+
+JieLi AC79 SDK files in the package (uboot.boot, cfg_tool.bin, eq_cfg_hw.bin), Copyright JieLi Technology
+  Apache License 2.0 (LICENSES/Apache-2.0-JieLi-SDK.txt). Fetched from JieLi at build time; not in this repository.
+
+Fonts, rendered into the firmware: Inter Tight (The Inter Project Authors), Silkscreen (Jason Kottke)
+  SIL Open Font License 1.1 (LICENSES/InterTight-OFL.txt, LICENSES/Silkscreen-OFL.txt).
