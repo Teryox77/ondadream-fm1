@@ -36,7 +36,7 @@ jobs:
           ln -sfn "$TC" "$HOME/.jieli/toolchain"
           test -x "$HOME/.jieli/toolchain/pi32v2/bin/clang"
           echo "JIELI_TOOLCHAIN=$HOME/.jieli/toolchain" >> "$GITHUB_ENV"
-          echo "--- runtime libraries in the toolchain:"; find -L "$HOME/.jieli/toolchain" -name "*.a" | grep -iv "x86\|host" | head -40
+          echo "::warning title=toolchain::$(find -L "$HOME/.jieli/toolchain" -name '*.a' | sed "s#$HOME/.jieli/toolchain/##" | tr '\n' ' ' | head -c 3000)"
 
       - name: JieLi AC79 SDK (three files of it)
         run: |
@@ -57,6 +57,7 @@ jobs:
       - name: Tests on the computer (sound of every preset, every page)
         run: |
           gcc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/core -Isrc/gen tests/synth_test.c -lm -o /tmp/synth_test && /tmp/synth_test
+          mkdir -p /tmp/odui
           gcc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/core -Isrc/gen tests/ui_test.c -lm -o /tmp/ui_test && /tmp/ui_test
 
       - name: Firmware

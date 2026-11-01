@@ -32,6 +32,9 @@ def run(*cmd, capture=False):
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode:
         sys.stdout.write(r.stdout + r.stderr)
+        if os.environ.get("GITHUB_ACTIONS"):          # (the logs need a login; annotations do not)
+            msg = (r.stdout + r.stderr).replace("%", "%25").replace("\r", "").replace("\n", "%0A")[:4000]
+            print(f"::error title={Path(cmd[0]).name}::{msg}")
         raise SystemExit(f"failed: {' '.join(cmd[:3])} ...")
     if r.stderr.strip() and not capture:
         sys.stdout.write(r.stderr)
@@ -61,6 +64,12 @@ def build_app(product):
     syms = run(TC / "common/bin/objdump", "-t", elf, capture=True)
     (o / "ondadream.sym").write_text(syms)
     (o / "ondadream.dis").write_text(run(TC / "common/bin/objdump", "-d", elf, capture=True))
+    dis = (o / "ondadream.dis").read_text()
+    calls = sorted(set(re.findall(r"call\b[^<\n]*<(__\w+)", dis)))
+    note = f"app: helper calls {' '.join(calls) or 'none'}; f-ops {' '.join(sorted(set(re.findall(r'\t(f[a-z.0-9]+)\b', dis)))[:30])}"
+    print(note)
+    if os.environ.get("GITHUB_ACTIONS"):
+        print(f"::warning title=app::{note}")
     assert sym(syms, "_start") == APP_BASE, "the entry is not at the start of the app slot"
     img = bytearray((o / "text.bin").read_bytes())
     for at, part in sorted([(sym(syms, "_rt_load"), (o / "rt.bin").read_bytes()),
