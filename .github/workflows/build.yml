@@ -46,7 +46,7 @@ jobs:
           for i in 1 2 3; do
             rm -rf "$SDK"
             if git clone --depth 1 --branch "$TAG" --filter=blob:none --sparse "$URL" "$SDK" \
-               && git -C "$SDK" sparse-checkout set --no-cone '/cpu/wl82/tools/' '**/Makefile' '**/*.mk' '**/*.bat' '/tools/*.sh'; then break; fi
+               && git -C "$SDK" sparse-checkout set --no-cone '/cpu/wl82/' '**/Makefile' '**/*.mk' '**/*.bat' '/tools/*.sh'; then break; fi
             rm -rf "$SDK"
             git clone --depth 1 --branch "$TAG" "$URL" "$SDK" && break
             echo "retry $i"; sleep 30
@@ -65,6 +65,9 @@ jobs:
             echo "::warning title=probe [$fl]::$D"
           done
           ls "$TC/pi32v2/bin" | tr '\n' ' ' | head -c 1500 | sed 's/^/::warning title=bin::/'; echo
+          F=$(grep -rlis "fpu" "$AC79_SDK/cpu/wl82" 2>/dev/null | head -8 | tr '\n' ' '); echo "::warning title=sdk fpu files::$F"
+          for f in $(grep -rlis "fpu" "$AC79_SDK/cpu/wl82" --include=*.S --include=*.s --include=*.c --include=*.h 2>/dev/null | head -4); do echo "::warning title=fpu in $(basename $f)::$(grep -in -B2 -A4 fpu "$f" | head -30 | tr '\n' ';' | head -c 1500)"; done
+          ls "$AC79_SDK/cpu/wl82" | tr '\n' ' ' | sed 's/^/::warning title=wl82::/'; echo
           grep -rhoE -- "-mcpu=[a-z0-9]+|-mfpu[=a-z0-9]*|-mfloat[=a-z-]*|-mhard-float|pi32v2/lib/[a-z0-9-]+" "$AC79_SDK" --include=Makefile* --include=*.mk --include=*.bat --include=*.sh 2>/dev/null | sort | uniq -c | sort -rn | head -20 | tr '\n' ';' | sed 's/^/::warning title=sdk flags::/'; echo
 
       - name: Tests on the computer (sound of every preset, every page)

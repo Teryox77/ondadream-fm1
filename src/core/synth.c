@@ -70,9 +70,9 @@ static float rndf(void) { return (float)(rnd() >> 8) * (1.f / 16777216.f); }
 /* ---------------------------------------------------------------- envelopes --- */
 /* OndaDream's ADSR: one-pole segments (attack aims at 1.3 and stops at 1), the time is the segment's time constant */
 typedef struct { uint8_t st; float v; } env_t;
-static float env_step(env_t *e, float a, float d, float s, float r)
+static float env_step(env_t *e, float a, float d, float s, float r, float n)   /* n samples on */
 {
-    float n = (float)OD_BLK, c;
+    float c;
     switch (e->st) {
     case 1:
         c = 1.f - od_exp2(-1.4427f * n / ((a < .002f ? .002f : a) * OD_FS));
@@ -106,6 +106,7 @@ typedef struct {
     int32_t vel_q15;
     uint32_t ph1, ph2;
     int32_t ic1, ic2;                    /* the filter's state */
+    int32_t tri1, tri2;                  /* TRI: the integrated squares, Q23 */
     env_t amp, fe;
     float lfo;                           /* its LFO's phase, turns */
     int32_t g0;                          /* the amplitude at the block's start, Q15 */
@@ -124,9 +125,14 @@ static void v_on(voice_t *v, int n, float vel)
     v->ph1 = rnd();
     v->ph2 = rnd();
     v->ic1 = v->ic2 = 0;
+    v->tri1 = v->tri2 = 0;
     v->amp.st = 1;
     v->fe.st = 1;
     v->lfo = rndf();
+#ifdef OD_TEST_ZERO_PHASE                       /* (tests: the phases the comparison with the preview uses) */
+    v->ph1 = v->ph2 = 0;
+    v->lfo = 0.f;
+#endif
     v->active = 1;
     v->rel = 0;
     note_flash_ms = od_ms();
@@ -141,6 +147,9 @@ static void direct_on(int n, float vel)
 {
     uint32_t i, best = 0xFFFFFFFFu;
     voice_t *t = &vc[0];
+#ifdef OD_TEST_LOG
+    OD_TEST_LOG(n, vel);
+#endif
     int rel = 0;
     for (i = 0; i < NV; i++)
         if (vc[i].active && vc[i].note == n) { v_on(&vc[i], n, vel); return; }
@@ -182,11 +191,13 @@ static inline int32_t osc(uint32_t ph, uint32_t inc, uint32_t wave)
     case 1:                                      /* SQUARE */
         s = ph < 0x80000000u ? 32767 : -32767;
         return s + blep(ph, inc) - blep(ph + 0x80000000u, inc);
-    case 2:                                      /* TRI */
-        s = (int32_t)(ph >> 16);
-        return s < 32768 ? 2 * s - 32768 : 98303 - 2 * s;
+    case 2:                                      /* TRI: v_render integrates the square */
     default:                                     /* SINE */
-        return OD_SINE[ph >> 22];
+        {   /* the table, interpolated (a bare lookup is ~-60 dB of grit) */
+            uint32_t i = ph >> 22;
+            int32_t a = OD_SINE[i], f = (int32_t)((ph >> 7) & 0x7FFFu);
+            return a + (((OD_SINE[i + 1u] - a) * f) >> 15);
+        }
     }
 }
 
@@ -196,10 +207,10 @@ static void v_render(voice_t *v, int32_t *out, uint32_t n)
     uint32_t wave = (uint32_t)CLAMP((int32_t)(P.wave + .5f), 0, 3), i;
     float amp, fe, l, vib, f1, f2, kmul, fc, g, k, a1f, vel, vamp;
     uint32_t inc1, inc2;
-    int32_t a1, a2, a3, m2, m1, g0, g1, ic1 = v->ic1, ic2 = v->ic2;
+    int32_t a1, a2, a3, m2, m1, g0, g1, gstep, d1, d2, ic1 = v->ic1, ic2 = v->ic2;
     uint32_t ph1 = v->ph1, ph2 = v->ph2;
-    amp = env_step(&v->amp, P.a, P.d, P.s, P.r);
-    fe = env_step(&v->fe, .003f, P.fDecay, 0.f, .08f);
+    amp = env_step(&v->amp, P.a, P.d, P.s, P.r, (float)n);
+    fe = env_step(&v->fe, .003f, P.fDecay, 0.f, .08f, (float)n);
     if (!v->amp.st) {
         v->active = 0;
         return;
@@ -227,12 +238,25 @@ static void v_render(voice_t *v, int32_t *out, uint32_t n)
     vamp = amp * (.25f + .75f * vel * vel);
     g1 = (int32_t)(CLAMP(vamp, 0.f, 1.f) * 32767.f);
     g0 = v->g0;
+    gstep = (g1 - g0) / (int32_t)n;              /* the amplitude, a ramp over the block */
+    d1 = (int32_t)(inc1 >> 16);                  /* TRI: dt, Q16 */
+    d2 = (int32_t)(inc2 >> 16);
     for (i = 0; i < n; i++) {
-        int32_t s = (((osc(ph1, inc1, wave) * m1) >> 15) + ((osc(ph2, inc2, wave) * m2) >> 15)) >> 1;   /* Q14 */
+        int32_t o1, o2, s;
+        if (wave == 2u) {                        /* TRI as the preview makes it: a leaky integral of the square */
+            v->tri1 += ((osc(ph1, inc1, 1u) * d1) >> 6) - (((v->tri1 >> 8) * d1) >> 10);
+            v->tri2 += ((osc(ph2, inc2, 1u) * d2) >> 6) - (((v->tri2 >> 8) * d2) >> 10);
+            o1 = CLAMP(v->tri1 >> 8, -32767, 32767);
+            o2 = CLAMP(v->tri2 >> 8, -32767, 32767);
+        } else {
+            o1 = osc(ph1, inc1, wave);
+            o2 = osc(ph2, inc2, wave);
+        }
+        s = (((o1 * m1) >> 15) + ((o2 * m2) >> 15)) >> 1;   /* Q14 */
         int32_t v3 = s - ic2;
         int32_t vv1 = (a1 * ic1 + a2 * v3) >> 13;
         int32_t vv2 = ic2 + ((a2 * ic1 + a3 * v3) >> 13);
-        int32_t gg = g0 + (((g1 - g0) * (int32_t)i) >> 4);
+        int32_t gg = g0 + gstep * (int32_t)i;
         ic1 = CLAMP(2 * vv1 - ic1, -100000, 100000);
         ic2 = CLAMP(2 * vv2 - ic2, -100000, 100000);
         out[i] += (CLAMP(vv2, -65535, 65535) * gg) >> 15;
@@ -258,7 +282,7 @@ static uint8_t ai_on;
 static uint32_t ai_rng = 1;
 static uint32_t arp_tile, arp_jump_ms;
 static int arp_on(void) { return P.arpPattern > .5f; }
-static uint32_t step_samples(void) { float b = P.arpBpm < 20.f ? 20.f : P.arpBpm; return (uint32_t)((float)OD_FS * 60.f / b / 4.f); }
+static uint32_t step_samples(void) { float b = P.arpBpm < 20.f ? 20.f : P.arpBpm; return (uint32_t)((float)OD_FS * 60.f / b / 4.f + .5f); }   /* (rounded, as the preview) */
 
 static int arp_seq(int8_t *out)
 {
@@ -277,7 +301,11 @@ static void fire_step(void)
     int n = arp_seq(seq), pat = (int)(P.arpPattern + .5f), i, note;
     float vel = .8f;
     if (!n) return;
+#ifdef OD_TEST_ZERO_PHASE
+    if (pat == 4) i = 0;                         /* (tests: the preview's Math.random() held at 0) */
+#else
     if (pat == 4) i = (int)(rnd() % (uint32_t)n);
+#endif
     else if (pat == 2) i = (n - 1) - (arp.idx % n);
     else if (pat == 3) {
         i = CLAMP(arp.idx, 0, n - 1);
@@ -305,7 +333,7 @@ static void fire_step(void)
         if (((note - arp.held[i]) % 12) == 0) { vel = arp.vels[i]; break; }
     direct_on(note, vel);
     arp.cur = note;
-    arp.gate_off = sclock + (uint32_t)((float)step_samples() * CLAMP(P.arpGate, .05f, .95f));
+    arp.gate_off = sclock + (uint32_t)((float)step_samples() * CLAMP(P.arpGate, .05f, .95f) + .5f);
     arp_tile = (arp_tile + 1u) % 8u;
     arp_jump_ms = od_ms();
 }
@@ -352,13 +380,13 @@ static void set_arp_pattern(float v)
 
 /* ---------------------------------------------------------------- effects --- */
 #define CH_N 2656u                       /* chorus: 60 ms */
-#define DL_N 26624u                      /* echo: 1.2 s at half rate (one sample of two stored) */
+#define DL_N 52992u                      /* echo: 1.2 s and a little */
 static int16_t ch_buf[CH_N];
 static int16_t dl_l[DL_N], dl_r[DL_N];
 static uint32_t ch_w, dl_w;
 static uint32_t ch_ph;                   /* chorus LFO, turns as 2^32 */
-static int32_t dl_lp_l, dl_lp_r, dl_hold_l, dl_hold_r;
-static float dl_cur = 15000.f;           /* the echo's time in samples (glides like a tape) */
+static int32_t dl_lp_l, dl_lp_r;
+static float dl_cur = 15435.f, dl_tgt = 15435.f;   /* the echo's time in samples (glides like a tape) */
 static const uint16_t COMB_T[4] = {1116, 1188, 1277, 1356}, AP_T[2] = {556, 441};
 static int16_t cb_l0[1116], cb_l1[1188], cb_l2[1277], cb_l3[1356], cb_r0[1139], cb_r1[1211], cb_r2[1300], cb_r3[1379];
 static int16_t ap_l0[556], ap_l1[441], ap_r0[579], ap_r1[464];
@@ -410,25 +438,51 @@ void od_audio(int32_t *lr, uint32_t n)
     rev = (int32_t)(CLAMP(P.rev, 0.f, 1.f) * 32767.f);
     for (b = 0; b < n; b += OD_BLK) {
         uint32_t m = n - b < OD_BLK ? n - b : OD_BLK;
-        float et = CLAMP(P.etime, .02f, 1.19f) * (float)OD_FS;
-        vol_s += (P.vol * master_v - vol_s) * .05f;
+        float et = CLAMP(P.etime, .02f, 1.2f) * (float)OD_FS;
+        vol_s += (P.vol * master_v - vol_s) * .00903f;      /* (the preview's smoothers: 40 ms) */
         volq = (int32_t)(CLAMP(vol_s, 0.f, 1.f) * 32767.f);
-        dl_cur += (et - dl_cur) * .012f;
+        dl_tgt += (et - dl_tgt) * .00302f;                  /* the time, smoothed (120 ms), then the glide (150 ms) */
+        dl_cur += (dl_tgt - dl_cur) * .00242f;
         for (i = 0; i < m; i++) mix[i] = 0;
-        /* the arpeggiator, at block resolution (16 samples: 0.36 ms) */
-        if (arp_on()) {
-            if (sclock >= arp.gate_off) { if (arp.cur >= 0) direct_off(arp.cur); arp.cur = -1; arp.gate_off = 0xFFFFFFFFu; }
-            if (sclock >= arp.next) { fire_step(); arp.next = sclock + step_samples(); }
+        /* the voices; the arpeggiator's steps and gates fall on their exact sample, as in the preview: the block is cut
+         * there (sclock: the voices' clock here, the effects' below) */
+        {
+            uint32_t at = 0, t0 = sclock;
+            while (at < m) {
+                uint32_t seg = m - at;
+                if (arp_on()) {
+                    if (arp.gate_off != 0xFFFFFFFFu && arp.gate_off - (t0 + at) < seg) seg = arp.gate_off - (t0 + at);
+                    if (arp.next != 0xFFFFFFFFu && arp.next - (t0 + at) < seg) seg = arp.next - (t0 + at);
+                }
+                if (seg) {
+                    for (j = 0; j < NV; j++)
+                        if (vc[j].active) v_render(&vc[j], mix + at, seg);
+                    at += seg;
+                }
+                sclock = t0 + at;
+                if (arp_on()) {
+                    if (arp.gate_off != 0xFFFFFFFFu && (int32_t)(sclock - arp.gate_off) >= 0) {
+                        if (arp.cur >= 0) direct_off(arp.cur);
+                        arp.cur = -1;
+                        arp.gate_off = 0xFFFFFFFFu;
+                    }
+                    if (arp.next != 0xFFFFFFFFu && (int32_t)(sclock - arp.next) >= 0) {
+                        fire_step();
+                        arp.next = sclock + step_samples();
+                    }
+                }
+            }
+            sclock = t0;
         }
-        for (j = 0; j < NV; j++)
-            if (vc[j].active) v_render(&vc[j], mix, m);
         for (i = 0; i < m; i++) {
             int32_t x, l, r, d1, d2, rl, rr;
             uint32_t ti, dq;
             /* the master's soft clip: tanh(x * pre) * post */
             x = (CLAMP(mix[i], -1000000, 1000000) * pre_q10) >> 9;   /* the voices' Q14 sum x pre: Q15 */
-            ti = (uint32_t)CLAMP((x >> 9) + 256, 0, 512);       /* tanh over -4..4: 64 steps a unit */
-            x = ((int32_t)OD_TANH[ti] * post_q14) >> 14;
+            x = CLAMP(x, -131071, 131071);
+            ti = (uint32_t)((x >> 9) + 256);                     /* tanh over -4..4: 64 steps a unit, interpolated */
+            x = OD_TANH[ti] + (((OD_TANH[ti + 1u] - OD_TANH[ti]) * (x & 511)) >> 9);
+            x = (x * post_q14) >> 14;
             /* chorus: two taps 12 +- 6 ms in quadrature */
             ch_buf[ch_w] = sat16(x);
             ch_ph += (uint32_t)(.6f * 4294967296.f / (float)OD_FS);
@@ -437,21 +491,16 @@ void od_audio(int32_t *lr, uint32_t n)
             l = ((x * (32767 - (cho * 13107 >> 15))) >> 15) + ((frd(ch_buf, ch_w, CH_N, (uint32_t)d1) * cho) >> 15);
             r = ((x * (32767 - (cho * 13107 >> 15))) >> 15) + ((frd(ch_buf, ch_w, CH_N, (uint32_t)d2) * cho) >> 15);
             ch_w = (ch_w + 1u) % CH_N;
-            /* echo: stereo, filtered feedback with a little cross, at half rate */
-            dq = (uint32_t)(dl_cur * 128.f);                    /* (half rate: samples / 2, Q8) */
+            /* echo: stereo, filtered feedback with a little cross (as the preview: every sample) */
+            dq = (uint32_t)(dl_cur * 256.f);
             if (dq > (DL_N - 2u) << 8) dq = (DL_N - 2u) << 8;
             rl = frd(dl_l, dl_w, DL_N, dq);
             rr = frd(dl_r, dl_w, DL_N, dq);
             dl_lp_l += (rl - dl_lp_l) >> 2;
             dl_lp_r += (rr - dl_lp_r) >> 2;
-            if (sclock & 1u) {
-                dl_l[dl_w] = sat16(((l + dl_hold_l) >> 1) + ((dl_lp_l * 14746) >> 15) + ((dl_lp_r * 3932) >> 15));
-                dl_r[dl_w] = sat16(((r + dl_hold_r) >> 1) + ((dl_lp_r * 14746) >> 15) + ((dl_lp_l * 3932) >> 15));
-                dl_w = (dl_w + 1u) % DL_N;
-            } else {
-                dl_hold_l = l;
-                dl_hold_r = r;
-            }
+            dl_l[dl_w] = sat16(l + ((dl_lp_l * 14746) >> 15) + ((dl_lp_r * 3932) >> 15));
+            dl_r[dl_w] = sat16(r + ((dl_lp_r * 14746) >> 15) + ((dl_lp_l * 3932) >> 15));
+            if (++dl_w >= DL_N) dl_w = 0;
             l += (rl * eco) >> 15;
             r += (rr * eco) >> 15;
             /* reverb: four combs and two all-passes a side */
@@ -462,8 +511,8 @@ void od_audio(int32_t *lr, uint32_t n)
                 wr >>= 2;
                 wl = allp(&al[1], allp(&al[0], wl));
                 wr = allp(&ar[1], allp(&ar[0], wr));
-                l += ((wl * rev) >> 15) * 5 / 4;
-                r += ((wr * rev) >> 15) * 5 / 4;
+                l += ((wl * rev) >> 15) * 6 / 5;
+                r += ((wr * rev) >> 15) * 6 / 5;
             }
             l = CLAMP((CLAMP(l, -65535, 65535) * volq) >> 15, -32767, 32767);
             r = CLAMP((CLAMP(r, -65535, 65535) * volq) >> 15, -32767, 32767);
