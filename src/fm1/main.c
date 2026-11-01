@@ -2,7 +2,7 @@
  * The FM-1 build: the core (src/core) on the hardware layer of felucca-bsp (MPL-2.0, bsp/).
  *
  *   audio   ALNK0 I2S, 44.1 kHz, halves of 128 frames: od_audio in the ISR, Q15 -> the codec's 24 bits
- *   input   TIMER5 at 10 kHz scans keys, buttons and encoders (BSP); the main loop hands the changes to the core
+ *   input   TIMER5 at 10 kHz scans keys, buttons and encoders (BSP); the audio ISR hands the changes to the core
  *   screen  od_frame draws 240x240 RGB565 into RAM; only the rows that changed go to the panel, byte-swapped
  *   USB     MIDI in (a keyboard or a DAW) and the installer's update entry: a new package can always replace this */
 #include <stdint.h>
@@ -51,9 +51,48 @@ static const uint8_t BTN_ID[OB_N] = {
 };
 static const uint8_t ENC_ID[OE_N] = { 0, 1, 6, 2, 3, 4, 5 };   /* SELECT ALGORITHM PRESETS KNOB1..4 */
 
+/* ---- the panel and MIDI to the core: in the audio ISR, before each half, so a key plays within 3 ms whatever the
+ * screen is doing (the main loop draws for tens of ms) ---- */
+static uint32_t notes_seen, btn_seen;
+static void midi_drain(void)
+{
+    if (midi_in_overflow) {                     /* a broken stream: drop it, release the notes */
+        mi_r = mi_w;
+        midi_in_overflow = 0;
+        od_midi(0xB0, 123, 0);
+        return;
+    }
+    while (mi_r != mi_w) {
+        uint32_t pkt = midi_in_q[mi_r % MQ];
+        mi_r++;
+        od_midi((uint8_t)(pkt >> 8), (uint8_t)((pkt >> 16) & 0x7Fu), (uint8_t)((pkt >> 24) & 0x7Fu));
+    }
+}
+static void panel_take(void)
+{
+    uint32_t i, d, n = fm1_in.notes, b = fm1_in.buttons;
+    if ((d = n ^ notes_seen) != 0u)
+        for (i = 0; i < 27u; i++)
+            if (d & (1u << i))
+                od_key(i, (int)((n >> i) & 1u));
+    notes_seen = n;
+    if ((d = b ^ btn_seen) != 0u)
+        for (i = 0; i < OB_N; i++)
+            if (d & (1u << BTN_ID[i]))
+                od_button(i, (int)((b >> BTN_ID[i]) & 1u));
+    btn_seen = b;
+    for (i = 0; i < OE_N; i++) {
+        int32_t st = fm1_enc_take(ENC_ID[i]);
+        if (st)
+            od_enc(i, st);
+    }
+    midi_drain();
+}
+
 /* ---- audio ---- */
 #define HALF_FRAMES 128u
 static int32_t abuf[2u * HALF_FRAMES * 2u];
+static volatile int32_t master_pot = -1;        /* the main loop reads the pot, the ISR hands it on */
 void fm1_alnk0_irq(void)
 {
     uint8_t p;
@@ -63,6 +102,11 @@ void fm1_alnk0_irq(void)
     if (p & FM1_AUDIO_HALF) {
         int32_t *o = &abuf[fm1_audio_free_half() * HALF_FRAMES * 2u];
         uint32_t i;
+        panel_take();
+        if (master_pot >= 0) {
+            od_master((uint32_t)master_pot);
+            master_pot = -1;
+        }
         od_audio(o, HALF_FRAMES);
         for (i = 0; i < 2u * HALF_FRAMES; i++)
             o[i] *= 1 << 7;                     /* Q15 -> 24 bits, -6 dBFS ceiling */
@@ -141,26 +185,9 @@ static void ota_show(uint32_t step, int32_t code)   /* the update's steps as a b
 }
 
 /* ---- the main loop ---- */
-static void midi_drain(void)
-{
-    if (midi_in_overflow) {                     /* a broken stream: drop it, release the notes */
-        mi_r = mi_w;
-        midi_in_overflow = 0;
-        od_midi(0xB0, 123, 0);
-        return;
-    }
-    while (mi_r != mi_w) {
-        uint32_t pkt = midi_in_q[mi_r % MQ], f;
-        mi_r++;
-        f = irq_save();
-        od_midi((uint8_t)(pkt >> 8), (uint8_t)((pkt >> 16) & 0x7Fu), (uint8_t)((pkt >> 24) & 0x7Fu));
-        irq_restore(f);
-    }
-}
-
 static void app_main(void)
 {
-    uint32_t i, notes_seen = 0, btn_seen = 0, leds_k = ~0u, leds_b = ~0u, last_adc = 0, last_frame = 0;
+    uint32_t i, leds_k = ~0u, leds_b = ~0u, last_adc = 0, last_frame = 0;
     int32_t master = -100;
     uint8_t healthy = 0;
     {
@@ -189,7 +216,7 @@ static void app_main(void)
     }
     fm1_irq_enable_all();
     for (;;) {
-        uint32_t now = fm1_ms, b, n, d, f;
+        uint32_t now = fm1_ms, b, n;
         fm1_wdt_feed();
         usb_retry(now);
         if (usb.uboot_req) {                    /* the SysEx soft key */
@@ -212,37 +239,13 @@ static void app_main(void)
             healthy = 1;
             boot_healthy();
         }
-        midi_drain();
-        /* the keys, the buttons, the encoders: changes to the core, the audio held off meanwhile */
-        n = fm1_in.notes;
-        b = fm1_in.buttons;
-        f = irq_save();
-        if ((d = n ^ notes_seen) != 0u)
-            for (i = 0; i < 27u; i++)
-                if (d & (1u << i))
-                    od_key(i, (int)((n >> i) & 1u));
-        notes_seen = n;
-        if ((d = b ^ btn_seen) != 0u)
-            for (i = 0; i < OB_N; i++)
-                if (d & (1u << BTN_ID[i]))
-                    od_button(i, (int)((b >> BTN_ID[i]) & 1u));
-        btn_seen = b;
-        irq_restore(f);
-        for (i = 0; i < OE_N; i++) {
-            int32_t s = fm1_enc_take(ENC_ID[i]);
-            if (s) {
-                f = irq_save();
-                od_enc(i, s);
-                irq_restore(f);
-            }
-        }
         if (now - last_adc >= 30u) {            /* MASTER: polled, a few hundred us */
             int32_t v;
             last_adc = now;
             v = fm1_adc_read(FM1_ADC_MASTER);
             if (v >= 0 && (v - master > 3 || master - v > 3 || (v != master && (v == 0 || v == 1023)))) {
                 master = v;
-                od_master((uint32_t)v);
+                master_pot = v;
             }
         }
         /* the LEDs */
