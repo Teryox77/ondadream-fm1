@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<!-- OndaDream firmware. Copyright (C) 2026 Teryox77. All rights reserved. -->
+<html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FM-1 → modalità di emergenza (UBOOT)</title>
+<style>body{font:16px/1.5 -apple-system,system-ui,"Segoe UI",sans-serif;background:#141518;color:#e6e8eb;max-width:640px;margin:40px auto;padding:0 16px}
+button{font:inherit;padding:8px 14px;margin:4px 0;border-radius:8px;border:1px solid #444;background:#2a2c31;color:#fff;cursor:pointer}
+button.go{background:#ff7a1a;border-color:#ff7a1a;color:#111;font-weight:600}li{margin:6px 0}#log{white-space:pre-wrap;color:#9aa0a8;font:13px ui-monospace,monospace}</style></head>
+<body>
+<h1>FM-1: modalità di emergenza</h1>
+<p>Questa pagina manda all'FM-1 il comando che lo mette nella modalità di aggiornamento del chip (UBOOT). Lo schermo diventa nero e sul PC compare il dispositivo <b>WL82 UBOOT1.00</b>: da lì lo strumento di recupero (<code>fm1-recover</code>) può scrivere un firmware. Funziona con OndaDream, Felucca e i firmware della stessa famiglia.</p>
+<p>Usa Chrome o Edge, con l'FM-1 acceso e collegato via USB. Chiudi le altre pagine e i programmi che usano MIDI.</p>
+<p><button class="go" id="find">1. Cerca le porte MIDI</button></p>
+<ul id="ports"></ul>
+<div id="log"></div>
+<script>
+"use strict";
+const KEY = [0xF0, 0x22, 0x24, 0x35, 0x7D, 0xF7];       /* the soft key: UBOOT */
+const log = (t) => { document.getElementById("log").textContent += t + "\n"; };
+document.getElementById("find").onclick = async () => {
+  let midi;
+  try { midi = await navigator.requestMIDIAccess({ sysex: true }); }
+  catch (e) { log("Accesso MIDI non consentito: " + e.message + " (consentilo nelle impostazioni del sito, icona a sinistra dell'indirizzo)"); return; }
+  const ul = document.getElementById("ports"); ul.innerHTML = "";
+  const outs = [...midi.outputs.values()];
+  if (!outs.length) { log("Nessuna porta MIDI in uscita trovata. Controlla il cavo e che l'FM-1 sia acceso."); return; }
+  log("Porte trovate: " + outs.map(o => o.name).join(", "));
+  for (const o of outs) {
+    const li = document.createElement("li"), b = document.createElement("button");
+    b.textContent = "2. Manda il comando a: " + o.name;
+    b.onclick = () => {
+      if (!confirm("Mandare il comando UBOOT a \"" + o.name + "\"? Manda solo all'FM-1.")) return;
+      try { o.send(KEY); log("Comando mandato a " + o.name + ". Se è l'FM-1, entro qualche secondo lo schermo diventa nero e compare WL82 UBOOT1.00."); }
+      catch (e) { log("Errore: " + e.message); }
+    };
+    li.appendChild(b); ul.appendChild(li);
+  }
+};
+</script>
+</body></html>

@@ -92,8 +92,9 @@ jobs:
       - name: Site
         run: |
           python3 installer/make_installer.py "dist/ondadream-$VER.fwsc" "$VER" site
-          mkdir -p site/webapp/try
+          mkdir -p site/webapp/try site/webapp/uboot
           cp build/web/* site/webapp/try/
+          cp web/uboot/index.html site/webapp/uboot/
           cat > site/index.html <<'HTML'
           <!doctype html><meta charset="utf-8"><title>OndaDream</title>
           <meta name="viewport" content="width=device-width, initial-scale=1">
