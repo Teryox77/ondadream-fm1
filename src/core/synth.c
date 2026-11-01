@@ -17,6 +17,7 @@ typedef struct {
     float lfoRate, lfoPitch, lfoCut, fDecay, vol, arpPattern, arpBpm, arpOct, arpGate, cho, eco, etime, rev;
 } patch_t;
 static patch_t P;
+static patch_t PS;                      /* what the voices and the effects play: P through the preview's smoothers */
 static float tmod;                      /* the screen's filter touch (not on the FM-1: 0) */
 static int preset_idx;
 
@@ -70,17 +71,31 @@ static float rndf(void) { return (float)(rnd() >> 8) * (1.f / 16777216.f); }
 /* ---------------------------------------------------------------- envelopes --- */
 /* OndaDream's ADSR: one-pole segments (attack aims at 1.3 and stops at 1), the time is the segment's time constant */
 typedef struct { uint8_t st; float v; } env_t;
+/* a segment's step over n samples: 1 - e^(-n / (t fs)); the last few asked are kept (the voices share them) */
+static float env_c(float t, float n)
+{
+    static float kt[6], kn[6], kc[6];
+    static uint32_t rr;
+    uint32_t i;
+    for (i = 0; i < 6u; i++)
+        if (kt[i] == t && kn[i] == n) return kc[i];
+    i = rr++ % 6u;
+    kt[i] = t;
+    kn[i] = n;
+    kc[i] = 1.f - od_exp2(-1.4427f * n / ((t < .002f ? .002f : t) * OD_FS));
+    return kc[i];
+}
 static float env_step(env_t *e, float a, float d, float s, float r, float n)   /* n samples on */
 {
     float c;
     switch (e->st) {
     case 1:
-        c = 1.f - od_exp2(-1.4427f * n / ((a < .002f ? .002f : a) * OD_FS));
+        c = env_c(a, n);
         e->v += c * (1.3f - e->v);
         if (e->v >= 1.f) { e->v = 1.f; e->st = 2; }
         break;
     case 2:
-        c = 1.f - od_exp2(-1.4427f * n / ((d < .002f ? .002f : d) * OD_FS));
+        c = env_c(d, n);
         e->v += c * (s - e->v);
         if (e->v - s < .001f && s - e->v < .001f) e->st = 3;
         break;
@@ -88,7 +103,7 @@ static float env_step(env_t *e, float a, float d, float s, float r, float n)   /
         e->v = s;
         break;
     case 4:
-        c = 1.f - od_exp2(-1.4427f * n / ((r < .002f ? .002f : r) * OD_FS));
+        c = env_c(r, n);
         e->v -= c * e->v;
         if (e->v < .0005f) { e->v = 0.f; e->st = 0; }
         break;
@@ -107,6 +122,8 @@ typedef struct {
     uint32_t ph1, ph2;
     int32_t ic1, ic2;                    /* the filter's state */
     int32_t tri1, tri2;                  /* TRI: the integrated squares, Q23 */
+    uint32_t c_inc1, c_inc2;             /* kept between blocks while their inputs stay: the phase steps, */
+    float c_vib, c_det, c_kmul, c_kt;    /* the key tracking */
     env_t amp, fe;
     float lfo;                           /* its LFO's phase, turns */
     int32_t g0;                          /* the amplitude at the block's start, Q15 */
@@ -126,6 +143,8 @@ static void v_on(voice_t *v, int n, float vel)
     v->ph2 = rnd();
     v->ic1 = v->ic2 = 0;
     v->tri1 = v->tri2 = 0;
+    v->c_inc1 = 0;
+    v->c_kmul = 0.f;
     v->amp.st = 1;
     v->fe.st = 1;
     v->lfo = rndf();
@@ -204,35 +223,49 @@ static inline int32_t osc(uint32_t ph, uint32_t inc, uint32_t wave)
 /* one voice, one block: the coefficients in float, the samples in integers, added to out (Q15) */
 static void v_render(voice_t *v, int32_t *out, uint32_t n)
 {
-    uint32_t wave = (uint32_t)CLAMP((int32_t)(P.wave + .5f), 0, 3), i;
+    uint32_t wave = (uint32_t)CLAMP((int32_t)(PS.wave + .5f), 0, 3), i;
     float amp, fe, l, vib, f1, f2, kmul, fc, g, k, a1f, vel, vamp;
     uint32_t inc1, inc2;
     int32_t a1, a2, a3, m2, m1, g0, g1, gstep, d1, d2, ic1 = v->ic1, ic2 = v->ic2;
     uint32_t ph1 = v->ph1, ph2 = v->ph2;
-    amp = env_step(&v->amp, P.a, P.d, P.s, P.r, (float)n);
-    fe = env_step(&v->fe, .003f, P.fDecay, 0.f, .08f, (float)n);
+    amp = env_step(&v->amp, PS.a, PS.d, PS.s, PS.r, (float)n);
+    fe = env_step(&v->fe, .003f, PS.fDecay, 0.f, .08f, (float)n);
     if (!v->amp.st) {
         v->active = 0;
         return;
     }
-    v->lfo += P.lfoRate * (float)n / (float)OD_FS;
+    v->lfo += PS.lfoRate * (float)n / (float)OD_FS;
     if (v->lfo >= 1.f) v->lfo -= 1.f;
     l = od_sinf(v->lfo);
-    vib = l * P.lfoPitch * .01f;
-    f1 = midi_hz((float)v->note + vib);
-    f2 = midi_hz((float)v->note + P.detune + vib);
-    inc1 = (uint32_t)(CLAMP(f1, 1.f, 19000.f) * (4294967296.f / (float)OD_FS));
-    inc2 = (uint32_t)(CLAMP(f2, 1.f, 19000.f) * (4294967296.f / (float)OD_FS));
-    kmul = od_exp2(((float)v->note - 48.f) * (1.f / 12.f) * P.keyTrk);
-    fc = P.cutoff * kmul * od_exp2(fe * P.fEnvAmt * 5.f + l * P.lfoCut * 2.f + tmod * 3.f);
+    vib = l * PS.lfoPitch * .01f;
+    if (vib != v->c_vib || PS.detune != v->c_det || !v->c_inc1) {   /* (kept while the pitch stays) */
+        f1 = midi_hz((float)v->note + vib);
+        f2 = midi_hz((float)v->note + PS.detune + vib);
+        v->c_inc1 = (uint32_t)(CLAMP(f1, 1.f, 19000.f) * (4294967296.f / (float)OD_FS));
+        v->c_inc2 = (uint32_t)(CLAMP(f2, 1.f, 19000.f) * (4294967296.f / (float)OD_FS));
+        v->c_vib = vib;
+        v->c_det = PS.detune;
+    }
+    inc1 = v->c_inc1;
+    inc2 = v->c_inc2;
+    if (PS.keyTrk != v->c_kt || !v->c_kmul) {
+        v->c_kmul = od_exp2(((float)v->note - 48.f) * (1.f / 12.f) * PS.keyTrk);
+        v->c_kt = PS.keyTrk;
+    }
+    kmul = v->c_kmul;
+    fc = PS.cutoff * kmul * od_exp2(fe * PS.fEnvAmt * 5.f + l * PS.lfoCut * 2.f + tmod * 3.f);
     fc = CLAMP(fc, 20.f, .42f * OD_FS);
     g = od_tan(3.14159265f * fc / (float)OD_FS);
-    k = 1.f / (.5f + P.reso * P.reso * 17.5f);
+    {
+        static float kr = -1.f, kk;
+        if (PS.reso != kr) { kr = PS.reso; kk = 1.f / (.5f + PS.reso * PS.reso * 17.5f); }
+        k = kk;
+    }
     a1f = 1.f / (1.f + g * (g + k));
     a1 = (int32_t)(a1f * 8192.f);
     a2 = (int32_t)(g * a1f * 8192.f);
     a3 = (int32_t)(g * g * a1f * 8192.f);
-    m2 = (int32_t)(CLAMP(P.oscMix, 0.f, 1.f) * 32767.f);
+    m2 = (int32_t)(CLAMP(PS.oscMix, 0.f, 1.f) * 32767.f);
     m1 = 32767 - m2;
     vel = (float)v->vel_q15 * (1.f / 32767.f);
     vamp = amp * (.25f + .75f * vel * vel);
@@ -419,6 +452,26 @@ static inline int32_t frd(const int16_t *b, uint32_t w, uint32_t n, uint32_t del
 }
 
 /* ---------------------------------------------------------------- the engine --- */
+/* the preview's smoothers: each parameter follows P with its own time constant, a step per audio buffer */
+static void smooth(uint32_t n)
+{
+    static const uint8_t MS[18] = {5, 20, 20, 20, 30, 20, 20, 20, 10, 10, 20, 10, 20, 20, 20, 10, 40, 60};
+    static float c[18];
+    static uint32_t cn;
+    float *d = &PS.wave;
+    const float *t = &P.wave;
+    uint32_t i;
+    if (cn != n) {
+        cn = n;
+        for (i = 0; i < 18u; i++)
+            c[i] = 1.f - od_exp2(-1.4427f * (float)n / ((float)MS[i] * .001f * OD_FS));
+    }
+    for (i = 0; i < 16u; i++)                    /* wave .. fDecay */
+        d[i] += (t[i] - d[i]) * c[i];
+    PS.cho += (P.cho - PS.cho) * c[16];        /* 40 ms */
+    PS.eco += (P.eco - PS.eco) * c[16];
+    PS.rev += (P.rev - PS.rev) * c[17];        /* 60 ms */
+}
 static float vol_s = .8f;               /* the volume, smoothed */
 static float master_v = 1.f;            /* the MASTER pot */
 
@@ -426,16 +479,18 @@ void od_audio(int32_t *lr, uint32_t n)
 {
     static int32_t mix[OD_BLK];
     uint32_t b, i, j;
-    float drive = P.drive < 1.f ? 1.f : P.drive, pre, post, th;
+    float drive, pre, post, th;
     int32_t pre_q10, post_q14, cho, eco, rev, volq, peak = 0;
+    smooth(n);
+    drive = PS.drive < 1.f ? 1.f : PS.drive;
     pre = .28f * drive;
     th = drive > 3.f ? .995f : (float)OD_TANH[(uint32_t)CLAMP((drive + 4.f) * 64.f, 0.f, 512.f)] * (1.f / 32767.f);
     post = .85f / (th < .4f ? .4f : th);
     pre_q10 = (int32_t)(pre * 1024.f);
     post_q14 = (int32_t)(post * 16384.f);       /* (post can reach 2.1) */
-    cho = (int32_t)(CLAMP(P.cho, 0.f, 1.f) * 32767.f);
-    eco = (int32_t)(CLAMP(P.eco, 0.f, 1.f) * 32767.f);
-    rev = (int32_t)(CLAMP(P.rev, 0.f, 1.f) * 32767.f);
+    cho = (int32_t)(CLAMP(PS.cho, 0.f, 1.f) * 32767.f);
+    eco = (int32_t)(CLAMP(PS.eco, 0.f, 1.f) * 32767.f);
+    rev = (int32_t)(CLAMP(PS.rev, 0.f, 1.f) * 32767.f);
     for (b = 0; b < n; b += OD_BLK) {
         uint32_t m = n - b < OD_BLK ? n - b : OD_BLK;
         float et = CLAMP(P.etime, .02f, 1.2f) * (float)OD_FS;
@@ -546,6 +601,7 @@ static void synth_init(void)
 {
     P.vol = .8f;
     preset_load(0);
+    PS = P;
 }
 static void synth_panic(void)
 {
