@@ -41,7 +41,9 @@ from pathlib import Path
 # name, color1, color2, color3, primary, secondary (8-bit RGB; stored as RGB565)
 RED, RED_LIGHT = (255, 72, 72), (190, 24, 40)
 PALETTES = [
-    ("GREY",   (14, 14, 14),    (180, 180, 180), (232, 232, 232), RED,       (72, 140, 255)),
+    # OndaDream: index 0 (the default, and what a saved GREY of Felucca becomes): the OndaDream synth's look, space
+    # black, light blue values, white text, red REC, orange for the one active thing; GREY moved to the end
+    ("ONDA",   (10, 11, 15),    (110, 160, 255), (234, 236, 240), (255, 51, 85), (255, 122, 26)),
     ("GREEN",  (6, 18, 10),     (84, 214, 120),  (226, 244, 230), RED,       (255, 214, 92)),
     ("AMBER",  (18, 14, 8),     (255, 168, 40),  (246, 236, 216), RED,       (96, 214, 230)),
     ("ICE",    (8, 16, 24),     (80, 184, 236),  (228, 240, 248), RED,       (255, 140, 100)),
@@ -55,6 +57,7 @@ PALETTES = [
     # 1.0.2: black and white (the derived tokens are set, not blended: bw()); the old MONO is GREY (id 0)
     # 1.8: its primary and secondary GREY's red and blue (were white)
     ("MONO",   (0, 0, 0),       (255, 255, 255), (255, 255, 255), RED,       (72, 140, 255)),
+    ("GREY",   (14, 14, 14),    (180, 180, 180), (232, 232, 232), RED,       (72, 140, 255)),
 ]
 BW = "MONO"
 BW_GREY = (82, 82, 82)             # MONO's one mid grey (RGB565 10/20/10): DIM LINE RAISE LANE
@@ -161,7 +164,7 @@ def main():
     ap.add_argument("--report", action="store_true")
     a = ap.parse_args()
     fails = []
-    assert PALETTES[0][0] == "GREY" and len(OLD) == 20 and len(PALETTES) <= 63
+    assert PALETTES[0][0] == "ONDA" and len(OLD) == 20 and len(PALETTES) <= 63
     rows = [derive(p) for p in PALETTES]
     for name, d in rows:
         if name == "GREY":
@@ -194,7 +197,7 @@ def main():
         for p in PALETTES:
             v = [to565(c, p[0] == BW) for c in p[1:]]
             out.append(f'    {{"{p[0]}", ' + ", ".join(f"0x{x:04x}" for x in v) + "},")
-        out += ["};", f"#define UI_NPALETTES {len(PALETTES)}u", "#define UI_GREY_INDEX 0u",
+        out += ["};", f"#define UI_NPALETTES {len(PALETTES)}u", f"#define UI_GREY_INDEX {names.index('GREY')}u", "#define UI_ONDA_INDEX 0u          /* OndaDream: the default */",
                 f"#define UI_BW_INDEX {names.index(BW)}u          /* MONO: black and white (src/gfx.c palette_set) */",
                 f"#define UI_BW_GREY 0x{to565(BW_GREY):04x}u          /* MONO's one grey: DIM LINE RAISE LANE */",
                 f"#define UI_PAL_TAG {PAL_TAG}u          /* stored id = UI_PAL_TAG + index; below 20: an old id */"]

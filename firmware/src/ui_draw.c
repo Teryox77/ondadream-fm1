@@ -456,9 +456,15 @@ static void draw_gaps(uint32_t y, uint32_t h)
 static void draw_frame(void)
 {
     uint32_t ch = card_h(), gy = graph_y(), gh = graph_h();   /* (MENU > LARGE: tall cards, a strip) */
-    gap_rows(H_HEAD, Y_LABEL);
-    gap_rows(Y_LABEL + ch, gy);
-    gap_rows(gy + gh, Y_FOOT);
+    if (gy < Y_LABEL) {                                 /* OndaDream: header, panel, cards, footer */
+        gap_rows(H_HEAD, gy);
+        gap_rows(gy + gh, Y_LABEL);
+        gap_rows(Y_LABEL + ch, Y_FOOT);
+    } else {                                            /* MENU > LARGE: header, tall cards, strip, footer */
+        gap_rows(H_HEAD, Y_LABEL);
+        gap_rows(Y_LABEL + ch, gy);
+        gap_rows(gy + gh, Y_FOOT);
+    }
     draw_gaps(Y_LABEL, ch);
 }
 
@@ -646,6 +652,8 @@ static void draw_column_tall(uint32_t c, const char *label, const char *val, con
  * the motion icon in place of its own, in the theme colour; a long label moves it left, up to the card's edge;
  * a label with no room for it at all (or FELUCCA_ICONS=0): the label in the theme colour.
  * vc: the value's colour (T_THEME, T_DIM inactive, T_ACCENT the knob just turned) */
+/* OndaDream: the four knobs' colours (KNOB 1 blue, 2 green, 3 white, 4 orange), on the ONDA palette */
+static const uint16_t ONDA_KC[4] = {RGB(62, 123, 255), RGB(0, 200, 120), RGB(232, 235, 239), RGB(255, 122, 26)};
 static void draw_column(uint32_t c, const char *label, const char *val, const char *unit, uint16_t vc,
                         int32_t ratio, uint32_t icon)
 {
@@ -653,8 +661,13 @@ static void draw_column(uint32_t c, const char *label, const char *val, const ch
     int hot = c == ui.hot_col && ui.hot_t, named = fmt_named, mot = card_mot_next && label[0], strip, snap;
     uint32_t kind = large_kind();                       /* MENU > LARGE: tall (draw_column_tall), or the label in M */
     uint8_t sig;
-    uint16_t lc = hot ? T_ACCENT : T_MID;
+    uint16_t lc = hot ? T_ACCENT : T_MID, kc = ONDA_KC[c & 3u];
     int32_t x, lx = 5, uw, room = COL_W - 8;
+    if (ux.onda) {                                      /* OndaDream: the label in the knob's colour, the value white */
+        lc = hot ? T_ACCENT : kc;
+        if (vc == T_THEME)
+            vc = T_TEXT;
+    }
     const aafont_t *vf = &AF_M;
     uint32_t n, kn;
     int32_t kid = kc_tag(val, &kn);
@@ -719,6 +732,8 @@ static void draw_column(uint32_t c, const char *label, const char *val, const ch
         }
         cv_begin(COL_W, COL_H, T_BG);
         cv_rrect(0, 0, COL_W, COL_H, 4, T_SURF, T_BG);
+        if (ux.onda)                                    /* OndaDream: the knob's colour along the card's top */
+            cv_rect(2, 0, COL_W - 4, 2, hot ? T_ACCENT : kc);
     }
     if (label[0] || val[0]) {
         if (!strip && label[0]) {
@@ -764,7 +779,7 @@ static void draw_column(uint32_t c, const char *label, const char *val, const ch
         if (!strip && ratio >= 0) {
             int32_t gw = COL_W - 10, fx = ratio * gw / 1000;
             cv_rrect(5, 38, gw, 3, 1, ux.style ? T_LINE : T_BG, T_SURF);   /* (LINE: no card to cut it from) */
-            cv_rrect(5, 38, fx < 3 ? 3 : fx, 3, 1, hot ? T_ACCENT : vc == T_DIM ? T_DIM : T_THEME, T_BG);
+            cv_rrect(5, 38, fx < 3 ? 3 : fx, 3, 1, hot ? T_ACCENT : vc == T_DIM ? T_DIM : ux.onda ? kc : T_THEME, T_BG);
         }
     }
     cv_oy = 0;
@@ -1344,7 +1359,7 @@ static void draw_columns(void)
 #define SPL_PAD 16                                  /* the text's inset: left (its ink), top and bottom (the capitals) */
 #define SPL_PITCH 20                                /* line to line */
 #ifndef ONDA_VERSION
-#define ONDA_VERSION "v0.1"     /* OndaDream (Teryox77), a Felucca fork */
+#define ONDA_VERSION "v0.2"     /* OndaDream (Teryox77), a Felucca fork */
 #endif
 static const char *const SPLASH_LINES[] = {"OndaDream", ONDA_VERSION, "Teryox77", "on Felucca " FELUCCA_VERSION};
 /* a band of two lines, h tall, at y on the screen: the first line's top at ly; the two lines' capitals declared

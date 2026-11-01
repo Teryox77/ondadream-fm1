@@ -175,6 +175,15 @@ static void graph_creature(const track_t *t)
     int32_t peak = 1, lvl;
     static uint32_t last_peak_frame;
     uint16_t body = T_THEME, det = T_ACCENT;
+    if (ux.onda) {                                              /* OndaDream: the sound's own two colours */
+        static const uint16_t CR_ACC[8] = {RGB(62, 123, 255), RGB(0, 200, 120), RGB(255, 122, 26), RGB(255, 51, 85),
+                                        RGB(178, 107, 255), RGB(41, 210, 224), RGB(154, 224, 0), RGB(255, 107, 213)};
+        uint32_t a1 = h2 % 8u, a2 = (h2 >> 5) % 8u;
+        if (a2 == a1)
+            a2 = (a1 + 3u) % 8u;
+        body = CR_ACC[a1];
+        det = CR_ACC[a2];
+    }
     /* the output's level (the scope's buffer): the creature reacts to it */
     for (i = 0; i < SCOPE_N; i += 4u) {
         int32_t s = scope_buf[i];

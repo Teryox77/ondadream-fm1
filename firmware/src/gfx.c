@@ -86,6 +86,7 @@ static struct {
     uint16_t bg, surf, text, theme, accent;
     uint16_t mid, dim, line, sel, tint, ink, rec, raise, key, lane, grid, ok;
     uint8_t light, mono;
+    uint8_t onda;                /* OndaDream: the ONDA palette (its four knob colours on the cards, the creature's) */
     uint8_t style;               /* MENU > STYLE (ui.c style_apply): ST_FLAT, ST_LINE */
     uint32_t gen;                /* bumped by palette_set (the text ramps follow) */
 } ux;
@@ -160,6 +161,7 @@ static void palette_set(uint32_t i)
     ux.pal[0] = p->c1; ux.pal[1] = p->c2; ux.pal[2] = p->c3; ux.pal[3] = p->primary; ux.pal[4] = p->secondary;
     ux.bg = p->c1; ux.text = p->c3; ux.theme = p->c2; ux.accent = p->secondary; ux.rec = p->primary;
     ux.mono = !cust && i == UI_GREY_INDEX;
+    ux.onda = !cust && i == UI_ONDA_INDEX;
     ux.mid = ux_mix(ux.bg, ux.text, UI_MID_PCT);
     ux.dim = ux_mix(ux.bg, ux.text, UI_DIM_PCT);
     ux.line = ux_mix(ux.bg, ux.text, UI_LINE_PCT);

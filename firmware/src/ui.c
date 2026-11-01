@@ -142,12 +142,15 @@ static uint8_t sync_reload;                  /* engine / preset / project / user
  * the panel 76..198 (a SURF area; the graphs live in it), footer 202..240; BG between them */
 #define Y_HEAD 0
 #define H_HEAD 24
-#define Y_LABEL 28                    /* the cards */
-#define Y_SEP_END 72
+static uint32_t large_kind(void);
+#define Y_LABEL_ONDA 154              /* the cards (OndaDream: under the panel, as the OndaDream synth has them) */
+#define Y_LABEL_TALL 28               /* MENU > LARGE's tall cards: right under the header, as Felucca's */
+#define Y_LABEL (large_kind() == LK_TALL ? Y_LABEL_TALL : Y_LABEL_ONDA)
+#define Y_SEP_END 198
 #define CARD_W 57
 #define CARD_H 44
 #define CARD_X(c) (3 + 59 * (int32_t)(c))
-#define Y_GRAPH 76                    /* the panel */
+#define Y_GRAPH 28                    /* the panel (OndaDream: right under the header, the scene first) */
 #define H_GRAPH 122
 #define Y_FOOT 202
 #define H_FOOT 38
