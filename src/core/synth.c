@@ -637,6 +637,24 @@ void od_selftest(void)
         }
         st_num(&e, (int32_t)(acc / 4096u));
     }
+    {                                                          /* SUB (preset 8, a sine), as a preset: its level */
+        patch_t keepP = P;
+        int keepi = preset_idx;
+        uint64_t acc = 0;
+        preset_load(7);
+        PS = P;
+        v_on(&t, 48, .85f);
+        t.ph1 = t.ph2 = 0;
+        t.lfo = 0.f;
+        for (k = 0; k < 16u; k++) {
+            for (i = 0; i < 256u; i++) out[i] = 0;
+            for (i = 0; i < 256u; i += OD_BLK) v_render(&t, out + i, OD_BLK);
+            for (i = 0; i < 256u; i++) acc += (uint32_t)(out[i] < 0 ? -out[i] : out[i]);
+        }
+        st_num(&e, (int32_t)(acc / 4096u));
+        P = keepP;
+        preset_idx = keepi;
+    }
     PS = keep;
 }
 
