@@ -46,13 +46,26 @@ jobs:
           for i in 1 2 3; do
             rm -rf "$SDK"
             if git clone --depth 1 --branch "$TAG" --filter=blob:none --sparse "$URL" "$SDK" \
-               && git -C "$SDK" sparse-checkout set cpu/wl82/tools; then break; fi
+               && git -C "$SDK" sparse-checkout set --no-cone '/cpu/wl82/tools/' '**/Makefile' '**/*.mk' '**/*.bat' '/tools/*.sh'; then break; fi
             rm -rf "$SDK"
             git clone --depth 1 --branch "$TAG" "$URL" "$SDK" && break
             echo "retry $i"; sleep 30
           done
           ls -la "$SDK/cpu/wl82/tools/uboot.boot" "$SDK/cpu/wl82/tools/cfg_tool.bin" "$SDK/cpu/wl82/tools/cfg/eq_cfg_hw.bin"
           echo "AC79_SDK=$SDK" >> "$GITHUB_ENV"
+
+      - name: Probe the compiler (float)
+        run: |
+          TC="$HOME/.jieli/toolchain"
+          printf 'float f(float a,float b){return a*b+a/b;}\nint g(float a){return a<1.5f;}\n' > /tmp/p.c
+          for fl in "" "-mcpu=r3" "-mcpu=r3 -mfpu" "-mhard-float" "-mcpu=r3 -mhard-float" "-mfloat-abi=hard"; do
+            if "$TC/pi32v2/bin/clang" -target pi32v2 $fl -O2 -c /tmp/p.c -o /tmp/p.o 2>/tmp/p.err; then
+              D=$("$TC/common/bin/objdump" -d /tmp/p.o | grep -v "^$" | tail -n +6 | tr '\t' ' ' | tr '\n' ';' | head -c 900)
+            else D="ERR $(head -c 300 /tmp/p.err)"; fi
+            echo "::warning title=probe [$fl]::$D"
+          done
+          ls "$TC/pi32v2/bin" | tr '\n' ' ' | head -c 1500 | sed 's/^/::warning title=bin::/'; echo
+          grep -rhoE -- "-mcpu=[a-z0-9]+|-mfpu[=a-z0-9]*|-mfloat[=a-z-]*|-mhard-float|pi32v2/lib/[a-z0-9-]+" "$AC79_SDK" --include=Makefile* --include=*.mk --include=*.bat --include=*.sh 2>/dev/null | sort | uniq -c | sort -rn | head -20 | tr '\n' ';' | sed 's/^/::warning title=sdk flags::/'; echo
 
       - name: Tests on the computer (sound of every preset, every page)
         run: |
@@ -64,6 +77,7 @@ jobs:
         run: |
           VER=$(sed -n 's/^#define OD_VERSION "v\([^"]*\)".*/\1/p' src/core/od.h)
           echo "VER=$VER" >> "$GITHUB_ENV"
+          export OD_LIBS="$JIELI_TOOLCHAIN/pi32v2/lib/libcompiler-rt.a"
           python3 tools/build_fm1.py --version "$VER"
           mkdir -p dist
           cp "build/fm1/ondadream-$VER.fwsc" dist/
