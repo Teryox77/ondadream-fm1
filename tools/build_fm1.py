@@ -140,8 +140,7 @@ def main():
         raise SystemExit("--version X.Y")
     product = f"FM-1_9{m[1]}{m[2]}"
     OUT.mkdir(parents=True, exist_ok=True)
-    subprocess.run([sys.executable, ROOT / "tools/gen_tables.py", ROOT / "src/gen/od_tables.h"], check=True)
-    subprocess.run([sys.executable, ROOT / "tools/gen_fonts.py", ROOT / "src/gen/od_fonts.h"], check=True)
+    subprocess.run([sys.executable, ROOT / "tools/gen_tables.py", ROOT / "src/gen/od_tables.h"], check=True)   # (the fonts: src/gen/od_fonts.h, made by tools/gen_fonts.js)
     build_app(product)
     build_loader()
     pkg = OUT / f"ondadream-{a.version}.fwsc"

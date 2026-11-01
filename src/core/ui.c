@@ -275,7 +275,7 @@ static float wave_y(int sh, float t)
     default: return g_sin(6.2832f * t);
     }
 }
-static void label(const char *s, float x, float y, uint16_t c) { no_glow(); text(&F_VAL10, x, y, s, c, TA_L); }
+static void label(const char *s, float x, float y, uint16_t c) { no_glow(); text(gs.a < .9f ? &F_PX7M : &F_PX10M, x, y, s, c, TA_L); }   /* (ENVELOPE: drawn at .75) */
 
 /* ---- the creatures (the web synth's drawUFO, drawAlien, ...) ---- */
 static void dr_ufo(int flash, uint32_t now)
@@ -688,8 +688,8 @@ static void dr_glo(float W, float H)
     cat(v[5], hold ? "ON" : "OFF");
     cat(v[6], ai_on ? "ON" : "OFF");
     for (i = 0; i < 7; i++) {
-        text(&F_SILK8, 10, 16.f + (float)i * 18.f, K[i], C_FAINT, TA_L);
-        text(&F_VAL11, 230, 16.f + (float)i * 18.f, v[i], C_WHITE, TA_R);
+        text(&F_SILK8, 10, 14.f + (float)i * 15.f, K[i], C_FAINT, TA_L);
+        text(&F_PX10, 230, 14.f + (float)i * 15.f, v[i], hexc(0xE9EBEE), TA_R);
     }
 }
 
@@ -726,11 +726,11 @@ static void dr_cards(uint32_t now)
         u[i] = 0;
         text(&F_SILK8, (float)x + 30.f, (float)y + 14.f, u, col, TA_C);
         k_txt(id, b);
-        if (text_w(&F_VAL11, b) > 56) {          /* too wide: without its unit */
+        if (text_w(&F_PX11, b) > 56) {          /* too wide: without its unit */
             char *sp = b; while (*sp && *sp != ' ') sp++;
             *sp = 0;
         }
-        text(&F_VAL11, (float)x + 30.f, (float)y + 32.f, b, C_WHITE, TA_C);
+        text(&F_PX11, (float)x + 30.f, (float)y + 32.f, b, C_WHITE, TA_C);
         no_glow();
         gs.col = hexc(0x2C2F34); gs.lw = 2.f;
         g_begin(); g_arc(cx, cy, 7, 3.1416f * .75f, 3.1416f * 2.25f); g_stroke();

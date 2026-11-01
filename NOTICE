@@ -12,5 +12,6 @@ Felucca web installer (installer/), Copyright (C) 2026 Leo Kuroshita (@kurogedel
 JieLi AC79 SDK files in the package (uboot.boot, cfg_tool.bin, eq_cfg_hw.bin), Copyright JieLi Technology
   Apache License 2.0 (LICENSES/Apache-2.0-JieLi-SDK.txt). Fetched from JieLi at build time; not in this repository.
 
-Fonts, rendered into the firmware: Inter Tight (The Inter Project Authors), Silkscreen (Jason Kottke)
-  SIL Open Font License 1.1 (LICENSES/InterTight-OFL.txt, LICENSES/Silkscreen-OFL.txt).
+Fonts, rendered into the firmware: Inter Tight (The Inter Project Authors), Silkscreen (Jason Kottke),
+  Pixelify Sans (The Pixelify Sans Project Authors)
+  SIL Open Font License 1.1 (LICENSES/InterTight-OFL.txt, LICENSES/Silkscreen-OFL.txt, LICENSES/PixelifySans-OFL.txt).

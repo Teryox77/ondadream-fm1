@@ -224,30 +224,34 @@ static const od_glyph_t *glyph_of(const od_font_t *f, char ch)
         if (f->chars[i] == ch) return &f->g[i];
     return 0;
 }
-static int32_t text_w(const od_font_t *f, const char *s)
+static int32_t text_w16(const od_font_t *f, const char *s)   /* 1/16 px */
 {
     int32_t w = 0;
-    for (; *s; s++) { const od_glyph_t *g = glyph_of(f, *s); if (g) w += g->adv; }
+    for (; *s; s++) { const od_glyph_t *g = glyph_of(f, *s); if (g) w += g->adv16; }
     return w;
 }
+static int32_t text_w(const od_font_t *f, const char *s) { return (text_w16(f, s) + 8) >> 4; }
 enum { TA_L, TA_C, TA_R };
-/* text with its baseline at y; x by align; screen space (the transform's translation only) */
+/* text with its baseline at y; x by align, as the canvas does it (the pen in 1/16 px, each glyph on the nearest
+ * pixel); the anchor goes through the transform, the glyphs keep their size (a scaled page picks a smaller font) */
 static int32_t text(const od_font_t *f, float fx, float fy, const char *s, uint16_t c, int al)
 {
-    int32_t x = (int32_t)(fx + gs.e + .5f), y = (int32_t)(fy + gs.f + .5f), w = text_w(f, s), x0;
-    if (al == TA_C) x -= w / 2;
-    else if (al == TA_R) x -= w;
-    x0 = x;
+    float px = gs.a * fx + gs.c * fy + gs.e, py = gs.b * fx + gs.d * fy + gs.f;   /* the anchor, transformed */
+    int32_t x16 = (int32_t)(px * 16.f + .5f), y = (int32_t)(py + .5f), w = text_w16(f, s), x0;
+    if (al == TA_C) x16 -= w / 2;
+    else if (al == TA_R) x16 -= w;
+    x0 = x16;
     for (; *s; s++) {
         const od_glyph_t *g = glyph_of(f, *s);
         uint32_t k, i, j;
+        int32_t x = (x16 + 8) >> 4;
         if (!g) continue;
         for (j = 0, k = g->off * 2u; j < g->h; j++)
             for (i = 0; i < g->w; i++, k++) {
                 uint32_t v = (f->px[k >> 1] >> ((k & 1u) ? 0 : 4)) & 15u;
                 if (v) blend(x + g->x + (int32_t)i, y - g->y + (int32_t)j, c, (uint32_t)((float)(v * 17u + 1u) * gs.alpha));
             }
-        x += g->adv;
+        x16 += g->adv16;
     }
-    return x - x0;
+    return (x16 - x0 + 8) >> 4;
 }
