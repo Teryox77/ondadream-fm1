@@ -12,6 +12,7 @@
 #define OD_PRODUCT "FM-1_910"                   /* the identity the installer sees, == the package's */
 #endif
 #define FELUCCA_ID OD_PRODUCT
+#define FELUCCA_USB_PRODUCT "FM-1 OndaDream"           /* the USB name: "FM-1" in it, as every installer looks for */
 #define RING_PUBLISH() __asm__ volatile("" ::: "memory")
 #include "fm1_time.h"
 #include "fm1_sys.h"
