@@ -51,7 +51,7 @@ def build_app(product):
     o.mkdir(parents=True, exist_ok=True)
     for s in ("crt0.S", "fm1_vec.S", "fm1_isr.S"):
         run(*CC, "-c", BSP / "chip" / s, "-o", o / (s[:-2] + ".o"))
-    run(*CC, "-O2", "-ffunction-sections", "-fno-builtin", "-fno-stack-protector", "-Wall", "-Wno-unused-function",
+    run(*CC, "-mcpu=r3", "-O2", "-ffunction-sections",   # r3: the FPU (as the JieLi SDK and other FM-1 firmwares) "-fno-builtin", "-fno-stack-protector", "-Wall", "-Wno-unused-function",
         *INC, f"-I{ROOT / 'src/core'}", f"-I{ROOT / 'src/gen'}", f"-I{ROOT / 'src/fm1'}", f'-DOD_PRODUCT="{product}"',
         "-c", ROOT / "src/fm1/main.c", "-o", o / "main.o")
     objs = [o / "crt0.o", o / "fm1_vec.o", o / "fm1_isr.o", o / "main.o"]
