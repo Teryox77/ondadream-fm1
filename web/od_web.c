@@ -35,3 +35,4 @@ EXPORT void web_master(uint32_t v) { od_master(v); }
 EXPORT void web_midi(uint32_t st, uint32_t d1, uint32_t d2) { od_midi((uint8_t)st, (uint8_t)d1, (uint8_t)d2); }
 EXPORT uint32_t web_leds_keys(void) { return od_leds_keys(); }
 EXPORT uint32_t web_leds_buttons(void) { return od_leds_buttons(); }
+EXPORT void web_stats(uint32_t fps, uint32_t cpu) { od_stats(fps, cpu); }

@@ -94,6 +94,7 @@ static void panel_take(void)
 #define HALF_FRAMES 128u
 static int32_t abuf[2u * HALF_FRAMES * 2u];
 static volatile int32_t master_pot = -1;        /* the main loop reads the pot, the ISR hands it on */
+static volatile uint32_t audio_ticks;           /* TIMER4 ticks spent rendering (the GLOBAL page's CPU) */
 void fm1_alnk0_irq(void)
 {
     uint8_t p;
@@ -102,7 +103,7 @@ void fm1_alnk0_irq(void)
     fm1_audio_ack_aux(p);
     if (p & FM1_AUDIO_HALF) {
         int32_t *o = &abuf[fm1_audio_free_half() * HALF_FRAMES * 2u];
-        uint32_t i;
+        uint32_t i, t0 = fm1_ticks();
         panel_take();
         if (master_pot >= 0) {
             od_master((uint32_t)master_pot);
@@ -112,6 +113,7 @@ void fm1_alnk0_irq(void)
         for (i = 0; i < 2u * HALF_FRAMES; i++)
             o[i] *= 1 << 7;                     /* Q15 -> 24 bits, -6 dBFS ceiling */
         fm1_audio_ack_half();
+        audio_ticks += fm1_ticks() - t0;
     }
     in_audio = 0;
 }
@@ -188,18 +190,49 @@ static void ota_show(uint32_t step, int32_t code)   /* the update's steps as a b
 
 /* ---- the rescue: USB and the installer's update entry only, nothing else; after two boots that never reached the main
  * loop (fm1_glue.c), or with OCT- held at power-on. The web installer finds the FM-1 here and installs again ---- */
-static void rescue_main(void)
+static char *hex8(char *e, uint32_t v)
 {
     uint32_t i;
-    static uint16_t row[240];
-    for (i = 0; i < 240u; i++)
-        row[i] = 0x20FDu;                       /* orange (0xFD20), high byte first: the rescue screen */
-    lcd_window(0, 0, 240, 240);
-    for (i = 0; i < 240u; i++) {
-        fm1_lcd_send_data(row, sizeof row);
-        fm1_lcd_wait();
-        fm1_lcd_deselect();
-    }
+    for (i = 0; i < 8u; i++)
+        *e++ = "0123456789ABCDEF"[(v >> (28u - 4u * i)) & 15u];
+    *e = 0;
+    return e;
+}
+static void rescue_main(void)
+{
+    char b[48], *e;
+    uint32_t i;
+    fb = fbuf;                                  /* the core's drawing (gfx.c), on the frame */
+    g_reset();
+    fill_rect(0, 0, 240, 240, 0xFD20u);         /* orange: the rescue */
+    text(&F_INT11, 120, 40, "ONDADREAM RESCUE", 0x0000u, TA_C);
+    text(&F_SILK8, 120, 62, "INSTALL AGAIN WITH THE WEB INSTALLER", 0x0000u, TA_C);
+    /* what the last boots reached (1 start .. 9 running) and why the chip last reset */
+    e = cat(b, "BOOTS ");
+    for (i = 0; i < 4u; i++) { *e++ = (char)('0' + diag.hist[i] % 10u); *e++ = ' '; }
+    *e = 0;
+    text(&F_SILK8, 20, 100, b, 0x0000u, TA_L);
+    e = cat(b, "RESET ");
+    e = hex8(e, diag.p3_rst);
+    e = cat(e, " FAIL ");
+    *e++ = (char)('0' + guard.failed % 10u);
+    *e = 0;
+    text(&F_SILK8, 20, 116, b, 0x0000u, TA_L);
+    if (fm1_crash.magic == FM1_CRASH_MAGIC) {
+        e = cat(b, "CRASH ");
+        e = hex8(e, fm1_crash.vec);
+        e = cat(e, " PC ");
+        hex8(e, fm1_crash.pc);
+        text(&F_SILK8, 20, 132, b, 0x0000u, TA_L);
+        e = cat(b, "EMU ");
+        e = hex8(e, fm1_crash.emu);
+        e = cat(e, " DBG ");
+        hex8(e, fm1_crash.dbg);
+        text(&F_SILK8, 20, 148, b, 0x0000u, TA_L);
+    } else
+        text(&F_SILK8, 20, 132, "NO CRASH ON RECORD", 0x0000u, TA_L);
+    text(&F_SILK8, 120, 200, OD_VERSION, 0x0000u, TA_C);
+    lcd_flush(1);
     usb_start();
     usb_on = 1;
     fm1_guard_lock_top();
@@ -226,7 +259,7 @@ static void rescue_main(void)
 /* ---- the main loop ---- */
 static void app_main(void)
 {
-    uint32_t i, leds_k = ~0u, leds_b = ~0u, last_adc = 0, last_frame = 0;
+    uint32_t i, leds_k = ~0u, leds_b = ~0u, last_adc = 0, last_frame = 0, last_stat = 0, frames = 0;
     int32_t master = -100;
     uint8_t healthy = 0;
     {
@@ -236,7 +269,9 @@ static void app_main(void)
         if (flash_ok)
             ota_boot_cleanup();                 /* what an interrupted update left behind */
     }
+    boot_stage(2);
     lcd_init();
+    boot_stage(3);
     fm1_input_init();
     fm1_timer5_start(isr_timer5, 4);            /* the key scan and the ms clock from here (the rescue needs them) */
     {
@@ -248,9 +283,12 @@ static void app_main(void)
     fm1_delay_ms(60);                           /* a few scans: OCT- held at power-on? */
     if (boot_rescue || (fm1_in.buttons & (1u << BTN_ID[OB_OCTDN])))
         rescue_main();
+    boot_stage(4);
     od_init();
     od_frame(fbuf);                             /* the splash */
+    boot_stage(5);
     lcd_flush(1);
+    boot_stage(6);
     fm1_adc_init();
     for (i = 0; i < sizeof abuf / sizeof abuf[0]; i++)
         abuf[i] = 0;
@@ -259,9 +297,11 @@ static void app_main(void)
         fm1_audio_init(abuf, HALF_FRAMES * 2u, isr_alnk0, 3);   /* below TIMER5 (4): the scan nests into a render */
         irq_restore(f);
     }
+    boot_stage(7);
     usb_start();
     usb_on = 1;
     fm1_guard_lock_top();
+    boot_stage(8);
     for (;;) {
         uint32_t now = fm1_ms, b, n;
         fm1_wdt_feed();
@@ -288,6 +328,7 @@ static void app_main(void)
         }
         if (!healthy && now > 2000u) {
             healthy = 1;
+            boot_stage(9);
             boot_healthy();
         }
         if (now - last_adc >= 30u) {            /* MASTER: polled, a few hundred us */
@@ -319,6 +360,14 @@ static void app_main(void)
             last_frame = now;
             od_frame(fbuf);
             lcd_flush(0);
+            frames++;
+        }
+        if (now - last_stat >= 1000u) {         /* GLOBAL: frames a second, the audio's share of the CPU */
+            uint32_t t = audio_ticks;
+            audio_ticks = 0;
+            od_stats(frames * 1000u / (now - last_stat), t / ((now - last_stat) * (FM1_TICKS_PER_US * 10u)));
+            frames = 0;
+            last_stat = now;
         }
     }
 }

@@ -674,10 +674,12 @@ static void dr_mod(float W, float H, uint32_t now)
     e = cat(b, "VIB "); e = fmt_i(e, (int32_t)(P.lfoPitch + .5f)); cat(e, " ct");
     label(b, W - 76, 16, viz.a2);
 }
+static uint32_t st_fps, st_cpu;
+void od_stats(uint32_t fps, uint32_t cpu) { st_fps = fps; st_cpu = cpu; }
 static void dr_glo(float W, float H)
 {
-    static const char *const K[7] = {"FIRMWARE", "ENGINE", "VOICES", "VOLUME", "OCTAVE", "HOLD", "ARP AI"};
-    char v[7][24];
+    static const char *const K[8] = {"FIRMWARE", "ENGINE", "VOICES", "VOLUME", "OCTAVE", "HOLD", "ARP AI", "SCREEN"};
+    char v[8][24];
     int i;
     (void)W; (void)H;
     cat(cat(v[0], "ONDADREAM "), OD_VERSION);
@@ -687,7 +689,8 @@ static void dr_glo(float W, float H)
     { char *e = v[4]; if (oct_shift > 0) *e++ = '+'; fmt_i(e, oct_shift); }
     cat(v[5], hold ? "ON" : "OFF");
     cat(v[6], ai_on ? "ON" : "OFF");
-    for (i = 0; i < 7; i++) {
+    { char *e = fmt_i(v[7], (int)st_fps); e = cat(e, " FPS  CPU "); e = fmt_i(e, (int)st_cpu); cat(e, " %"); }
+    for (i = 0; i < 8; i++) {
         text(&F_SILK8, 10, 14.f + (float)i * 15.f, K[i], C_FAINT, TA_L);
         text(&F_PX10, 230, 14.f + (float)i * 15.f, v[i], hexc(0xE9EBEE), TA_R);
     }

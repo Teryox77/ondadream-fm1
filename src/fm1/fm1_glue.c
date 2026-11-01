@@ -12,6 +12,10 @@ extern uint32_t _rt_start[], _rt_end[], _rt_load[], _pool_start[], _pool_end[];
 static uint8_t boot_rescue;                     /* two failed boots: the rescue (main.c), not OndaDream */
 
 static struct { uint32_t magic, pending, failed; } guard __attribute__((section(".noinit")));
+/* how far each boot got (main.c BOOT_STAGE), kept across resets: the rescue screen shows the last ones */
+static struct { uint32_t magic; uint8_t stage, hist[4]; uint8_t p3_rst; } diag __attribute__((section(".noinit")));
+#define DIAG_MAGIC 0x4F444431u
+static void boot_stage(uint32_t s) { diag.stage = (uint8_t)s; }
 static volatile uint8_t in_audio;               /* set by the audio ISR: the tick nests into it */
 static volatile uint8_t usb_on;                 /* usb_start has run: the tick may poll it */
 
@@ -157,8 +161,25 @@ static void app_main(void);
 void fm1_cstart(void)
 {
     uint32_t *s, *d;
+    fm1_cpu1_stop();                            /* the second core held first: a reset (a watchdog, a fault, the update,
+                                                 * the firmware before this one) can leave it running old code, which
+                                                 * would write into the RAM cleared below (as Felucca's start) */
+    fm1_audio_stop();                           /* and no DMA left running into the RAM by the firmware or the loader */
+    fm1_usb_reset();                            /* before this one (the USB endpoints write RAM): both start again later */
     fm1_time_init();
+    fm1_reset_reason();
     fm1_wdt_arm(0x0D);
+    if (diag.magic != DIAG_MAGIC) {
+        diag.magic = DIAG_MAGIC;
+        diag.stage = 0;
+        diag.hist[0] = diag.hist[1] = diag.hist[2] = diag.hist[3] = 0;
+    }
+    diag.hist[3] = diag.hist[2];                /* the stages the last four boots reached, newest first */
+    diag.hist[2] = diag.hist[1];
+    diag.hist[1] = diag.hist[0];
+    diag.hist[0] = diag.stage;
+    diag.stage = 1;
+    diag.p3_rst = fm1_boot.p3_rst;
     if (guard.magic != 0x4F445231u) {
         guard.magic = 0x4F445231u;
         guard.failed = 0;
@@ -182,6 +203,7 @@ void fm1_cstart(void)
         *d = *s;
     for (s = _rt_load, d = _rt_start; d < _rt_end; s++, d++)    /* the flash driver, run from RAM */
         *d = *s;
+    fm1_mailbox_clear();                        /* boot info and mailbox: nothing stale (an old "usb_update_mode") */
     fm1_guard_enable(FM1_GUARD_STACK | FM1_GUARD_WRITE | FM1_GUARD_BUS | FM1_GUARD_PC);
     app_main();
     for (;;)
