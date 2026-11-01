@@ -57,7 +57,7 @@ def build_app(product):
     objs = [o / "crt0.o", o / "fm1_vec.o", o / "fm1_isr.o", o / "main.o"]
     elf = o / "ondadream.elf"
     libs = [p for p in os.environ.get("OD_LIBS", "").split(":") if p]
-    run(TC / "pi32v2/bin/ld", "--gc-sections", "-e", "_start", "-T", ROOT / "src/fm1/app.ld", *objs, *libs,
+    run(TC / "pi32v2/bin/ld", "-T", ROOT / "src/fm1/app.ld", *objs, *libs,
         "-o", elf)
     for sect, name in ((".text", "text.bin"), (".data", "data.bin"), (".ram_text", "rt.bin")):
         run(TC / "common/bin/objcopy", "-O", "binary", "-j", sect, elf, o / name)
@@ -78,10 +78,14 @@ def build_app(product):
             assert at - APP_BASE >= len(img), "sections overlap"
             img += b"\xff" * (at - APP_BASE - len(img)) + part
     img += b"\xff" * (-len(img) % 4)
-    bss_end = sym(syms, "_bss_end")
-    print(f"app: {len(img)} B in flash, RAM used up to {bss_end:#x} (stacks from 0x1c74000)")
-    if bss_end > 0x01C74000:
-        raise SystemExit("app: RAM overflows into the stacks")
+    bss_end, pool_end = sym(syms, "_bss_end"), sym(syms, "_pool_end")
+    where = " ".join(f"{n}={sym(syms, n) or 0:#x}" for n in ("rowbuf", "abuf", "ep1rx", "fbuf", "dl_l"))
+    note = f"app: {len(img)} B in flash; .bss to {bss_end:#x} (< 0x1c1a000), pool to {pool_end:#x} (< 0x1c74000); {where}"
+    print(note)
+    if os.environ.get("GITHUB_ACTIONS"):
+        print(f"::warning title=memory::{note}")
+    if bss_end > 0x01C1A000 or pool_end > 0x01C74000:
+        raise SystemExit("app: RAM overflows")
     (OUT / "app.bin").write_bytes(img)
     return bytes(img)
 

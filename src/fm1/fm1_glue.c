@@ -4,14 +4,16 @@
  * Boot, LCD set-up, the 10 kHz tick and the installer's update hooks, adapted from felucca-bsp's hwtest.
  * This file is under the MPL-2.0 like the BSP it comes from; the rest of OndaDream is not.
  *
- * Two boots in a row that never reach the main loop's healthy point drop into UBOOT, so a broken build can
- * always be replaced (the web installer, or the stock firmware through the chip's update mode). */
+ * Two boots in a row that never reach the main loop's healthy point start the rescue (USB and the update entry only,
+ * main.c), where the web installer can install again; two more, and the chip's own update mode (UBOOT). */
 
 extern uint32_t _data_start[], _data_end[], _data_load[], _bss_start[], _bss_end[];
-extern uint32_t _rt_start[], _rt_end[], _rt_load[];
+extern uint32_t _rt_start[], _rt_end[], _rt_load[], _pool_start[], _pool_end[];
+static uint8_t boot_rescue;                     /* two failed boots: the rescue (main.c), not OndaDream */
 
 static struct { uint32_t magic, pending, failed; } guard __attribute__((section(".noinit")));
 static volatile uint8_t in_audio;               /* set by the audio ISR: the tick nests into it */
+static volatile uint8_t usb_on;                 /* usb_start has run: the tick may poll it */
 
 /* ---- the 10 kHz tick: key scan, milliseconds, USB at 2 kHz (never while nested in the audio render) ---- */
 void fm1_timer5_irq(void)
@@ -30,7 +32,7 @@ void fm1_timer5_irq(void)
         sub = 0;
         owed = 1;
     }
-    if (owed && !in_audio) {
+    if (owed && !in_audio && usb_on) {
         owed = 0;
         usb_poll();
     }
@@ -165,7 +167,7 @@ void fm1_cstart(void)
     if (guard.pending)
         guard.failed++;
     guard.pending = 1;
-    if (guard.failed >= 2u) {
+    if (guard.failed >= 4u) {                   /* the rescue failed too: the chip's own update mode */
         guard.failed = 0;
         guard.pending = 0;
         fm1_enter_uboot();
@@ -173,6 +175,9 @@ void fm1_cstart(void)
     fm1_irq_init();
     for (d = _bss_start; d < _bss_end; d++)
         *d = 0;
+    for (d = _pool_start; d < _pool_end; d++)
+        *d = 0;
+    boot_rescue = guard.failed >= 2u;
     for (s = _data_load, d = _data_start; d < _data_end; s++, d++)
         *d = *s;
     for (s = _rt_load, d = _rt_start; d < _rt_end; s++, d++)    /* the flash driver, run from RAM */

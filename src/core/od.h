@@ -6,6 +6,9 @@
 #include <stdint.h>
 
 #define OD_VERSION "v1.0"
+#ifndef OD_BIG
+#define OD_BIG                          /* big buffers: the FM-1 build puts them in the RAM above .bss (src/fm1/app.ld) */
+#endif
 #define OD_AUTHOR "Teryox77"
 
 /* ---- panel: the printed labels ---- */

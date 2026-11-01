@@ -39,7 +39,8 @@ void *memmove(void *d, const void *s, unsigned n)
     return d;
 }
 
-/* the core reads the clock the tick keeps */
+/* the core reads the clock the tick keeps; its big buffers go to POOL (app.ld) */
+#define OD_BIG __attribute__((section(".pool")))
 uint32_t od_ms(void) { return fm1_ms; }
 #include "od.c"
 
@@ -119,7 +120,7 @@ extern void isr_alnk0(void);
 static void ota_quiet(void) { fm1_audio_stop(); }
 
 /* ---- the screen: rows that changed, swapped to high byte first, two row buffers so the swap overlaps the DMA ---- */
-static uint16_t fbuf[240u * 240u];
+static uint16_t fbuf[240u * 240u] OD_BIG;      /* (drawn here, sent through rowbuf: the DMA reads .bss) */
 static uint32_t row_sum[240];
 static uint16_t rowbuf[2][240];
 
@@ -149,6 +150,7 @@ static void lcd_rows(uint32_t y0, uint32_t y1)  /* rows y0 .. y1 - 1 */
             row_swap(rowbuf[b ^ 1u], &fbuf[(y + 1u) * 240u]);
         fm1_lcd_wait();
         fm1_lcd_deselect();
+        fm1_wdt_feed();
         b ^= 1u;
     }
 }
@@ -184,6 +186,43 @@ static void ota_show(uint32_t step, int32_t code)   /* the update's steps as a b
     lcd_rows(214, 226);
 }
 
+/* ---- the rescue: USB and the installer's update entry only, nothing else; after two boots that never reached the main
+ * loop (fm1_glue.c), or with OCT- held at power-on. The web installer finds the FM-1 here and installs again ---- */
+static void rescue_main(void)
+{
+    uint32_t i;
+    static uint16_t row[240];
+    for (i = 0; i < 240u; i++)
+        row[i] = 0x20FDu;                       /* orange (0xFD20), high byte first: the rescue screen */
+    lcd_window(0, 0, 240, 240);
+    for (i = 0; i < 240u; i++) {
+        fm1_lcd_send_data(row, sizeof row);
+        fm1_lcd_wait();
+        fm1_lcd_deselect();
+    }
+    usb_start();
+    usb_on = 1;
+    fm1_guard_lock_top();
+    for (;;) {
+        uint32_t now = fm1_ms;
+        fm1_wdt_feed();
+        usb_retry(now);
+        if (now > 2000u)
+            boot_healthy();                     /* the next power-on tries OndaDream again */
+        if (usb.uboot_req) {
+            usb_detach();
+            fm1_delay_ms(30);
+            fm1_enter_uboot();
+        }
+        ota_service();
+        if (usb.ota_req) {
+            usb.ota_req = 0;
+            if (flash_ok)
+                ota_session();
+        }
+    }
+}
+
 /* ---- the main loop ---- */
 static void app_main(void)
 {
@@ -198,23 +237,31 @@ static void app_main(void)
             ota_boot_cleanup();                 /* what an interrupted update left behind */
     }
     lcd_init();
-    od_init();
-    od_frame(fbuf);                             /* the splash's first frame before the light comes on */
-    lcd_flush(1);
     fm1_input_init();
-    fm1_adc_init();
-    for (i = 0; i < sizeof abuf / sizeof abuf[0]; i++)
-        abuf[i] = 0;
-    fm1_audio_init(abuf, HALF_FRAMES * 2u, isr_alnk0, 3);
-    usb_start();
-    fm1_timer5_start(isr_timer5, 4);            /* above the audio (3): the scan keeps its pace during a render */
-    fm1_guard_lock_top();
+    fm1_timer5_start(isr_timer5, 4);            /* the key scan and the ms clock from here (the rescue needs them) */
     {
         uint32_t f = irq_save();
         fm1_lcd_backlight(1);                   /* port A is the scan's too: IRQs off around it */
         irq_restore(f);
     }
     fm1_irq_enable_all();
+    fm1_delay_ms(60);                           /* a few scans: OCT- held at power-on? */
+    if (boot_rescue || (fm1_in.buttons & (1u << BTN_ID[OB_OCTDN])))
+        rescue_main();
+    od_init();
+    od_frame(fbuf);                             /* the splash */
+    lcd_flush(1);
+    fm1_adc_init();
+    for (i = 0; i < sizeof abuf / sizeof abuf[0]; i++)
+        abuf[i] = 0;
+    {
+        uint32_t f = irq_save();                /* (a vector is attached with IRQs off) */
+        fm1_audio_init(abuf, HALF_FRAMES * 2u, isr_alnk0, 3);   /* below TIMER5 (4): the scan nests into a render */
+        irq_restore(f);
+    }
+    usb_start();
+    usb_on = 1;
+    fm1_guard_lock_top();
     for (;;) {
         uint32_t now = fm1_ms, b, n;
         fm1_wdt_feed();
@@ -231,7 +278,11 @@ static void app_main(void)
             if (flash_ok) {
                 ota_quiet();
                 ota_session();
-                fm1_audio_init(abuf, HALF_FRAMES * 2u, isr_alnk0, 3);
+                {
+                    uint32_t f = irq_save();
+                    fm1_audio_init(abuf, HALF_FRAMES * 2u, isr_alnk0, 3);
+                    irq_restore(f);
+                }
             }
             lcd_flush(1);
         }

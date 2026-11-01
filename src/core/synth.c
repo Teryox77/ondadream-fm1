@@ -414,15 +414,16 @@ static void set_arp_pattern(float v)
 /* ---------------------------------------------------------------- effects --- */
 #define CH_N 2656u                       /* chorus: 60 ms */
 #define DL_N 52992u                      /* echo: 1.2 s and a little */
-static int16_t ch_buf[CH_N];
-static int16_t dl_l[DL_N], dl_r[DL_N];
+static int16_t ch_buf[CH_N] OD_BIG;
+static int16_t dl_l[DL_N] OD_BIG, dl_r[DL_N] OD_BIG;
 static uint32_t ch_w, dl_w;
 static uint32_t ch_ph;                   /* chorus LFO, turns as 2^32 */
 static int32_t dl_lp_l, dl_lp_r;
 static float dl_cur = 15435.f, dl_tgt = 15435.f;   /* the echo's time in samples (glides like a tape) */
 static const uint16_t COMB_T[4] = {1116, 1188, 1277, 1356}, AP_T[2] = {556, 441};
-static int16_t cb_l0[1116], cb_l1[1188], cb_l2[1277], cb_l3[1356], cb_r0[1139], cb_r1[1211], cb_r2[1300], cb_r3[1379];
-static int16_t ap_l0[556], ap_l1[441], ap_r0[579], ap_r1[464];
+static int16_t cb_l0[1116] OD_BIG, cb_l1[1188] OD_BIG, cb_l2[1277] OD_BIG, cb_l3[1356] OD_BIG, cb_r0[1139] OD_BIG, cb_r1[1211] OD_BIG,
+    cb_r2[1300] OD_BIG, cb_r3[1379] OD_BIG;
+static int16_t ap_l0[556] OD_BIG, ap_l1[441] OD_BIG, ap_r0[579] OD_BIG, ap_r1[464] OD_BIG;
 typedef struct { int16_t *b; uint16_t n, i; int32_t f; } comb_t;
 typedef struct { int16_t *b; uint16_t n, i; } ap_t;
 static comb_t cl[4] = {{cb_l0, 1116}, {cb_l1, 1188}, {cb_l2, 1277}, {cb_l3, 1356}};
