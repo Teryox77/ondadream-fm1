@@ -130,7 +130,7 @@ static float k_get(int k)
     case K_AI: return ai_on ? 1.f : 0.f;
     case K_SQBPM: return (float)(sq.bpm - 40) / 200.f;
     case K_SQLVL: return tr[sel_track].vol;
-    case K_SQSND: return sel_track ? (float)tr[sel_track].preset / (float)(OD_NPRESETS - 1) : (float)sel_drum / 7.f;
+    case K_SQSND: return sel_track ? (float)tr[sel_track].preset / (float)(n_presets() - 1) : (float)sel_drum / 7.f;
     case K_SQNOTE: return sel_track ? (float)tr[sel_track].sel_note / (float)(PIANO_ROWS - 1) : (float)rhythm_idx / (float)(NRHY - 1);
     case K_MXVOL: return tr[sel_track].vol;
     case K_MXPAN: return (tr[sel_track].pan + 1.f) / 2.f;
@@ -173,7 +173,7 @@ static void k_set(int k, float v)
     case K_SQBPM: sq.bpm = (int)(40.f + v * 200.f + .5f); break;
     case K_SQLVL: case K_MXVOL: tr[sel_track].vol = v; break;
     case K_SQSND:
-        if (sel_track) tr[sel_track].preset = (int)(v * (float)(OD_NPRESETS - 1) + .5f);
+        if (sel_track) tr[sel_track].preset = (int)(v * (float)(n_presets() - 1) + .5f);
         else sel_drum = (int)(v * 7.f + .5f);
         break;
     case K_SQNOTE:
@@ -271,7 +271,8 @@ static int viz_for = -1;
 static void viz_make(int i)
 {
     int k, a1, a2;
-    mb_s = (uint32_t)i * 2654435761u + 99u;
+    uint32_t seed = i < OD_NPRESETS ? (uint32_t)i : (uint32_t)i * 7919u + 31u;   /* the saved ones: the preview's idx*7919+31 */
+    mb_s = seed * 2654435761u + 99u;
     viz.accent = ACCENTS[a1 = (int)(mb() * 8.f)];
     a2 = (int)(mb() * 8.f);
     if (a2 == a1) a2 = (a1 + 3) % 8;
@@ -519,7 +520,7 @@ static void dr_scene(float W, float H, uint32_t now)
         g_move(cx + 6.f * sc, cy + 12.f * sc); g_line(cx + 16.f, baseY - 4.f); g_stroke();
         gs.alpha = 1.f;
     }
-    label(OD_PRESETS[preset_idx].name, 10, 16, viz.accent);
+    label(preset_at(preset_idx)->name, 10, 16, viz.accent);
     cat(b, WAVE_NAMES[sh]);
     label(b, W - 56.f, 16, C_FAINT);
 }
@@ -767,7 +768,7 @@ static uint16_t shade(uint16_t c, float f)       /* the preview's shade(): each 
     return RGB((uint32_t)((float)r * f), (uint32_t)((float)g * f), (uint32_t)((float)b * f));
 }
 static void lower(char *d, const char *s) { while (*s) { *d++ = (char)(*s >= 'A' && *s <= 'Z' ? *s + 32 : *s); s++; } *d = 0; }
-static const char *track_name(int t) { return t ? OD_PRESETS[tr[t].preset].name : RHYTHMS[rhythm_idx].name; }
+static const char *track_name(int t) { return t ? preset_at(tr[t].preset)->name : RHYTHMS[rhythm_idx].name; }
 static void cut(char *d, const char *s, int n) { int i; for (i = 0; i < n && s[i]; i++) d[i] = s[i]; d[i] = 0; }
 static void dr_seq_full(uint32_t now)
 {
@@ -869,7 +870,7 @@ static void dr_header(void)
     if (preset_idx + 1 < 10) *e++ = '0';
     e = fmt_i(e, preset_idx + 1);
     e = cat(e, "/");
-    fmt_i(e, OD_NPRESETS);
+    fmt_i(e, n_presets());
     text(&F_SILK8, 5, 12, b, C_INK, TA_L);
     text(&F_SILK8, 150, 12, PG_TITLE[page], viz.accent, TA_C);
     lit = (int)((float)lvl_peak / 32767.f * 6.f + .5f);
@@ -1110,6 +1111,7 @@ void od_midi(uint8_t st, uint8_t d1, uint8_t d2)
     if (c == 0x90u && d2) { midi_held[d1 & 127u] = 1; key_on(d1 & 127u, (float)d2 / 127.f); record_note(d1 & 127u); }
     else if (c == 0x80u || (c == 0x90u && !d2)) { midi_held[d1 & 127u] = 0; key_off(d1 & 127u); }
 }
+void od_store_done(int ok) { if (!ok) toast("SAVE FAILED"); }
 static void set_page(int p) { page = p; }
 void od_button(uint32_t b, int down)
 {
@@ -1136,7 +1138,14 @@ void od_button(uint32_t b, int down)
         rec_on = (uint8_t)!rec_on;
         toast(rec_on ? "REC: PLAY THE KEYS" : "REC OFF");
         break;
-    case OB_SAVE: toast("SAVE: NEXT VERSION"); break;
+    case OB_SAVE:                                /* the sound as it is, as the next "MIO n" (kept through power-off) */
+        if (preset_save() < 0) toast("MEMORY FULL (30/30)");
+        else {
+            char t[24];
+            cat(cat(t, "SAVED: "), preset_at(preset_idx)->name);
+            toast(t);
+        }
+        break;
     case OB_OCTDN: case OB_OCTUP:
         oct_shift = oct_shift + (b == OB_OCTUP ? 1 : -1);
         oct_shift = oct_shift < -3 ? -3 : oct_shift > 3 ? 3 : oct_shift;
@@ -1164,7 +1173,7 @@ void od_enc(uint32_t e, int32_t s)
         float step = id == K_WAVE ? 1.f / 3.f : id == K_APAT ? .25f : id == K_AOCT ? .5f : id == K_OCT ? 1.f / 6.f
                    : id == K_AI || id == K_MXMUTE ? 1.f : id == K_SQBPM ? 1.f / 200.f
                    : id == K_SQLVL || id == K_MXVOL || id == K_MXPAN || id == K_MXFX ? 1.f / 100.f
-                   : id == K_SQSND ? (sel_track ? 1.f / (float)(OD_NPRESETS - 1) : 1.f / 7.f)
+                   : id == K_SQSND ? (sel_track ? 1.f / (float)(n_presets() - 1) : 1.f / 7.f)
                    : id == K_SQNOTE ? (sel_track ? 1.f / (float)(PIANO_ROWS - 1) : 1.f / (float)(NRHY - 1)) : 1.f / 128.f;
         int32_t a = s < 0 ? -s : s;
         if (step < .01f && a > 2) step *= (float)(a > 6 ? 4 : 2);   /* acceleration */

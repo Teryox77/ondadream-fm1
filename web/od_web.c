@@ -36,3 +36,8 @@ EXPORT void web_midi(uint32_t st, uint32_t d1, uint32_t d2) { od_midi((uint8_t)s
 EXPORT uint32_t web_leds_keys(void) { return od_leds_keys(); }
 EXPORT uint32_t web_leds_buttons(void) { return od_leds_buttons(); }
 EXPORT void web_stats(uint32_t fps, uint32_t cpu) { od_stats(fps, cpu); }
+/* SAVE: the presets kept in the browser (localStorage, by the page) */
+static uint8_t store_img[OD_STORE_MAX_BYTES];
+EXPORT uint8_t *web_store_buf(void) { return store_img; }
+EXPORT uint32_t web_store_take(void) { return od_store_dirty() ? od_store_image(store_img, sizeof store_img) : 0u; }
+EXPORT int web_store_load(uint32_t n) { return od_store_load(store_img, n); }

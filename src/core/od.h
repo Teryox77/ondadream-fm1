@@ -33,3 +33,9 @@ void od_midi(uint8_t st, uint8_t d1, uint8_t d2);   /* a channel message (USB MI
 uint32_t od_leds_keys(void);               /* bit k: key k lit (27 keys) */
 uint32_t od_leds_buttons(void);            /* bit b: button b (OB_*) lit */
 int od_splash(void);                       /* 1 while the power-on splash runs */
+/* the presets saved with SAVE: the platform keeps the image (the FM-1 in its flash) */
+int od_store_dirty(void);                  /* 1 once after a SAVE: write the image */
+#define OD_STORE_MAX_BYTES 3008u
+uint32_t od_store_image(uint8_t *buf, uint32_t max);   /* the image's bytes (at most OD_STORE_MAX_BYTES), 0 if max is short */
+void od_store_done(int ok);                /* the platform's answer: 0 = it could not keep it (the screen says so) */
+int od_store_load(const uint8_t *buf, uint32_t n);     /* at start, after od_init; -1 if not a store */

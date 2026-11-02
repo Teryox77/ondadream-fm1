@@ -85,6 +85,37 @@ int main(void)
         if (bad) { printf("sequencer: %d failures\n", bad); return 1; }
         printf("sequencer ok\n");
     }
+    {   /* SAVE: thirty "MIO n", then full; the image back into a fresh state; a damaged image refused */
+        static uint8_t img[OD_STORE_MAX_BYTES], bad_img[OD_STORE_MAX_BYTES];
+        uint32_t n, k;
+        int bad = 0;
+        od_preset_t keep[OD_MAXUSER];
+        od_button(OB_HOME, 1);
+        for (k = 0; k < 31u; k++) {
+            od_enc(OE_PRESET, 3); od_enc(OE_K1, (int32_t)k % 3); od_enc(OE_K4, 2);   /* a different sound each time */
+            od_button(OB_SAVE, 1);
+            if (k < 30u && (preset_idx != OD_NPRESETS + (int)k || !od_store_dirty())) { printf("SAVE %u: not taken\n", k); bad++; }
+        }
+        if (n_user != 30 || od_store_dirty() || n_presets() != OD_NPRESETS + 30) { printf("SAVE: not full at 30\n"); bad++; }
+        od_frame(frame); save("save_full");
+        if (strcmp(preset_at(OD_NPRESETS + 29)->name, "MIO 30") || strcmp(preset_at(OD_NPRESETS)->name, "MIO 1")) { printf("SAVE: names\n"); bad++; }
+        n = od_store_image(img, sizeof img);
+        if (n != 8u + 30u * 100u) { printf("store: %u bytes\n", n); bad++; }
+        memcpy(keep, user_p, sizeof keep);
+        memcpy(bad_img, img, n);
+        bad_img[8 + 5 * 100 + 16] = 0xFF; bad_img[8 + 5 * 100 + 17] = 0xFF; bad_img[8 + 5 * 100 + 18] = 0xFF; bad_img[8 + 5 * 100 + 19] = 0x7F;   /* a NaN */
+        n_user = 0; memset(user_p, 0, sizeof user_p);
+        if (od_store_load(bad_img, n) == 0 || n_user != 0) { printf("store: a damaged image taken\n"); bad++; }
+        if (od_store_load(img, n - 1u) == 0) { printf("store: a short image taken\n"); bad++; }
+        if (od_store_load(img, n) != 0 || n_user != 30) { printf("store: the image refused\n"); bad++; }
+        for (k = 0; k < 30u; k++)
+            if (memcmp(&keep[k].wave, &user_p[k].wave, 25 * sizeof(float)) || strcmp(keep[k].name, user_p[k].name)) { printf("store: preset %u differs\n", k); bad++; }
+        preset_go(OD_NPRESETS + 7);
+        if (P.cutoff != user_p[7].cutoff || P.wave != user_p[7].wave) { printf("store: MIO 8 does not play as saved\n"); bad++; }
+        od_frame(frame); save("home_mio8");
+        if (bad) { printf("save: %d failures\n", bad); return 1; }
+        printf("save ok\n");
+    }
     printf("ok, %u ms\n", now_ms);
     return 0;
 }

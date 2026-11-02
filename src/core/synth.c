@@ -641,12 +641,24 @@ static void patch_voice(patch_t *d, const od_preset_t *p)   /* what a voice play
     d->reso = p->reso; d->fEnvAmt = p->fEnvAmt; d->keyTrk = p->keyTrk; d->a = p->a; d->d = p->d; d->s = p->s; d->r = p->r;
     d->lfoRate = p->lfoRate; d->lfoPitch = p->lfoPitch; d->lfoCut = p->lfoCut; d->fDecay = p->fDecay;
 }
+/* the presets saved with SAVE (the preview's USER_PRESETS: "MIO 1".."MIO 30", after the 43), kept by the platform */
+#define OD_MAXUSER 30
+static od_preset_t user_p[OD_MAXUSER];
+static char user_name[OD_MAXUSER][8];
+static int n_user;
+static uint8_t store_dirty;
+static int n_presets(void) { return OD_NPRESETS + n_user; }
+static const od_preset_t *preset_at(int i)
+{
+    return i >= OD_NPRESETS && i < OD_NPRESETS + n_user ? &user_p[i - OD_NPRESETS] : &OD_PRESETS[i < OD_NPRESETS && i >= 0 ? i : 0];
+}
 static void preset_load(int i)
 {
     const od_preset_t *p;
     float keep_vol = P.vol;
-    preset_idx = (i % OD_NPRESETS + OD_NPRESETS) % OD_NPRESETS;
-    p = &OD_PRESETS[preset_idx];
+    int n = n_presets();
+    preset_idx = (i % n + n) % n;
+    p = preset_at(preset_idx);
     P.wave = p->wave; P.detune = p->detune; P.oscMix = p->oscMix; P.drive = p->drive; P.cutoff = p->cutoff;
     P.reso = p->reso; P.fEnvAmt = p->fEnvAmt; P.keyTrk = p->keyTrk; P.a = p->a; P.d = p->d; P.s = p->s; P.r = p->r;
     P.lfoRate = p->lfoRate; P.lfoPitch = p->lfoPitch; P.lfoCut = p->lfoCut; P.fDecay = p->fDecay;
@@ -654,6 +666,76 @@ static void preset_load(int i)
     P.cho = p->cho; P.eco = p->eco; P.etime = p->etime; P.rev = p->rev;
     P.vol = keep_vol > 0.f ? keep_vol : p->vol;
     set_arp_pattern(p->arpPattern);
+}
+static void user_name_set(int k)          /* "MIO " + (k + 1) */
+{
+    char *e = user_name[k];
+    int v = k + 1;
+    *e++ = 'M'; *e++ = 'I'; *e++ = 'O'; *e++ = ' ';
+    if (v >= 10) *e++ = (char)('0' + v / 10);
+    *e++ = (char)('0' + v % 10);
+    *e = 0;
+    user_p[k].name = user_name[k];
+}
+static int preset_save(void)             /* SAVE: the sound as it is now, as the next "MIO n"; -1 when full */
+{
+    od_preset_t *u;
+    if (n_user >= OD_MAXUSER) return -1;
+    u = &user_p[n_user];
+    u->wave = P.wave; u->detune = P.detune; u->oscMix = P.oscMix; u->drive = P.drive; u->cutoff = P.cutoff;
+    u->reso = P.reso; u->fEnvAmt = P.fEnvAmt; u->keyTrk = P.keyTrk; u->a = P.a; u->d = P.d; u->s = P.s; u->r = P.r;
+    u->lfoRate = P.lfoRate; u->lfoPitch = P.lfoPitch; u->lfoCut = P.lfoCut; u->fDecay = P.fDecay; u->vol = P.vol;
+    u->arpPattern = P.arpPattern; u->arpBpm = P.arpBpm; u->arpOct = P.arpOct; u->arpGate = P.arpGate;
+    u->cho = P.cho; u->eco = P.eco; u->etime = P.etime; u->rev = P.rev;
+    user_name_set(n_user);
+    preset_idx = OD_NPRESETS + n_user;
+    n_user++;
+    store_dirty = 1;
+    return preset_idx;
+}
+/* the store's image: "ODU1", the count, then each preset's 25 numbers (the order of od_preset_t), little-endian */
+static void put32(uint8_t *b, uint32_t v) { b[0] = (uint8_t)v; b[1] = (uint8_t)(v >> 8); b[2] = (uint8_t)(v >> 16); b[3] = (uint8_t)(v >> 24); }
+static uint32_t get32(const uint8_t *b) { return (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24; }
+int od_store_dirty(void) { int d = store_dirty; store_dirty = 0; return d; }
+uint32_t od_store_image(uint8_t *b, uint32_t max)
+{
+    int k, j;
+    if (max < 8u + (uint32_t)n_user * 100u) return 0;
+    put32(b, 0x3155444Fu);
+    put32(b + 4, (uint32_t)n_user);
+    for (k = 0; k < n_user; k++)
+        for (j = 0; j < 25; j++) {
+            union { float f; uint32_t u; } c;
+            c.f = (&user_p[k].wave)[j];
+            put32(b + 8 + k * 100 + j * 4, c.u);
+        }
+    return 8u + (uint32_t)n_user * 100u;
+}
+int od_store_load(const uint8_t *b, uint32_t n)   /* 0: taken; -1: not a store (the presets stay as they are) */
+{
+    /* each number in a sane range (the knobs' and the presets' with room): a damaged store must not reach the voices */
+    static const float LO[25] = {0, -48, 0, 0, 20, 0, 0, 0, .0005f, .001f, 0, .001f, .01f, 0, 0, .005f, 0, 0, 20, 1, 0, 0, 0, .02f, 0};
+    static const float HI[25] = {3, 48, 1, 16, 20000, 1, 1, 1, 10, 10, 1, 10, 40, 100, 1, 10, 1, 4, 300, 3, 1, 1, 1, 1.5f, 1};
+    uint32_t cnt, k, j;
+    if (n < 8u || get32(b) != 0x3155444Fu) return -1;
+    cnt = get32(b + 4);
+    if (cnt > OD_MAXUSER || n < 8u + cnt * 100u) return -1;
+    for (k = 0; k < cnt; k++)
+        for (j = 0; j < 25u; j++) {
+            union { float f; uint32_t u; } c;
+            c.u = get32(b + 8 + k * 100u + j * 4u);
+            if (!(c.f >= LO[j] - .0001f && c.f <= HI[j] + .0001f)) return -1;   /* (NaN fails too) */
+        }
+    for (k = 0; k < cnt; k++) {
+        for (j = 0; j < 25u; j++) {
+            union { float f; uint32_t u; } c;
+            c.u = get32(b + 8 + k * 100u + j * 4u);
+            (&user_p[k].wave)[j] = c.f;
+        }
+        user_name_set((int)k);
+    }
+    n_user = (int)cnt;
+    return 0;
 }
 /* a self-test of the arithmetic the voices use, run once at start: GLOBAL shows it (the FM-1 against the computer) */
 static char od_test_txt[64];

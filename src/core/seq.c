@@ -381,7 +381,7 @@ static void seq_control(void)
     uint32_t r, k, now = od_ms();
     for (r = 1; r < NTR; r++)
         if (tp_for[r] != tr[r].preset) {
-            patch_voice(&tp[r], &OD_PRESETS[tr[r].preset]);
+            patch_voice(&tp[r], preset_at(tr[r].preset));
             tp_for[r] = tr[r].preset;
         }
     for (k = 0; k < 4u; k++)
