@@ -128,7 +128,7 @@ static const uint16_t OD_EXP2F[257] = {
 #define OD_NPRESETS 83
 typedef struct { const char *name; float wave, detune, oscMix, drive, cutoff, reso, fEnvAmt, keyTrk, a, d, s, r, lfoRate, lfoPitch, lfoCut, fDecay, vol, arpPattern, arpBpm, arpOct, arpGate, cho, eco, etime, rev; } od_preset_t;
 static const od_preset_t OD_PRESETS[OD_NPRESETS] = {
-    {"INIT", 0.0f, 0.06f, 0.5f, 1.6f, 2200.0f, 0.25f, 0.45f, 0.4f, 0.005f, 0.25f, 0.75f, 0.25f, 5.0f, 6.0f, 0.0f, 0.35f, 0.8f, 0.0f, 120.0f, 1.0f, 0.6f, 0.0f, 0.0f, 0.35f, 0.0f},
+    {"MEDUSA", 0.0f, 0.06f, 0.5f, 1.6f, 2200.0f, 0.25f, 0.45f, 0.4f, 0.005f, 0.25f, 0.75f, 0.25f, 5.0f, 6.0f, 0.0f, 0.35f, 0.8f, 0.0f, 120.0f, 1.0f, 0.6f, 0.0f, 0.0f, 0.35f, 0.0f},
     {"BASSO CALDO", 0.0f, 0.08f, 0.5f, 2.5f, 420.0f, 0.35f, 0.6f, 0.3f, 0.003f, 0.2f, 0.4f, 0.15f, 5.0f, 6.0f, 0.0f, 0.25f, 0.8f, 0.0f, 120.0f, 1.0f, 0.6f, 0.0f, 0.0f, 0.35f, 0.0f},
     {"ACIDO", 0.0f, 0.06f, 0.5f, 3.5f, 300.0f, 0.85f, 0.8f, 0.5f, 0.002f, 0.18f, 0.2f, 0.12f, 5.0f, 6.0f, 0.0f, 0.16f, 0.8f, 0.0f, 120.0f, 1.0f, 0.6f, 0.0f, 0.2f, 0.24f, 0.0f},
     {"PAD SOGNO", 0.0f, 0.12f, 0.5f, 1.3f, 900.0f, 0.15f, 0.2f, 0.4f, 0.8f, 1.2f, 0.85f, 1.8f, 0.6f, 5.0f, 0.0f, 0.35f, 0.8f, 0.0f, 120.0f, 1.0f, 0.6f, 0.5f, 0.0f, 0.35f, 0.45f},
