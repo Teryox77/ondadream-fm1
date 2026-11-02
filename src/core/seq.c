@@ -40,7 +40,20 @@ typedef struct {
     uint32_t t;                          /* samples since the hit */
     float ph, ph2, hp, hp2, pn, pn2;
     float hph[6];
+    float e1, e2;                        /* its two decays, e^(-t / tau), a multiply a sample */
 } drum_t;
+/* e^(-1 / (tau fs)) for each decay: KICK pitch .038 s, level .42; TOM .075, .3; SNARE tone .085, noise .19;
+ * CLHAT .09 x .22; OPHAT .42 x .32; CLAP tail .13; RIM .028 */
+#define KD_KF .9994034767150879f
+#define KD_KA .9999459981918335f
+#define KD_TF .9996976852416992f
+#define KD_TA .9999244213104248f
+#define KD_ST .9997332692146301f
+#define KD_SN .9998806715011597f
+#define KD_CH .9988554120063782f
+#define KD_OH .9998313188552856f
+#define KD_CL .9998255968093872f
+#define KD_RM .9991905093193054f
 #define DRUM_POLY 4u
 static drum_t dv[DRUM_POLY];
 static uint32_t drum_hits;
@@ -60,6 +73,7 @@ static void drum_trigger(drum_t *d, uint8_t type, float tm)
     d->t = 0;
     d->rs = ++drum_hits * 0x9E3779B9u | 1u;
     d->ph = d->ph2 = d->hp = d->hp2 = d->pn = d->pn2 = 0.f;
+    d->e1 = d->e2 = 1.f;
     for (k = 0; k < 6u; k++) d->hph[k] = 0.f;
 }
 static void drum_render(drum_t *d, int32_t *out, uint32_t n, float gain)
@@ -71,21 +85,25 @@ static void drum_render(drum_t *d, int32_t *out, uint32_t n, float gain)
         float t = (float)d->t * isr, s = 0.f, dur = .3f;
         switch (d->type) {
         case DR_KICK: {
-            float f = (42.f + 165.f * exp_f(-t / .038f)) * tm, body, sub, amp, click;
+            float f = (42.f + 165.f * d->e1) * tm, body, sub, amp, click;
             d->ph += f * isr; if (d->ph >= 1.f) d->ph -= 1.f;
             body = sin_t(d->ph);
             sub = sin_t(d->ph * 2.f) * .18f;                       /* the second harmonic: the body */
-            amp = exp_f(-t / .42f);
+            amp = d->e2;
+            d->e1 *= KD_KF;
+            d->e2 *= KD_KA;
             click = t < .002f ? (1.f - t / .002f) * (drnd(d) * 2.f - 1.f) * .7f : 0.f;   /* the attack */
             s = SAT((body + sub) * amp, 1.8f, 1.05618256f) + click;
             dur = .55f;
             break;
         }
         case DR_TOMLO: case DR_TOMHI: {
-            float base = d->type == DR_TOMLO ? 125.f : 225.f, f = (base * .55f + base * exp_f(-t / .075f)) * tm, click;
+            float base = d->type == DR_TOMLO ? 125.f : 225.f, f = (base * .55f + base * d->e1) * tm, click;
             d->ph += f * isr; if (d->ph >= 1.f) d->ph -= 1.f;
             click = t < .0015f ? (1.f - t / .0015f) * (drnd(d) * 2.f - 1.f) * .3f : 0.f;
-            s = SAT(sin_t(d->ph) * exp_f(-t / .3f), 1.4f, 1.12949471f) + click;
+            s = SAT(sin_t(d->ph) * d->e2, 1.4f, 1.12949471f) + click;
+            d->e1 *= KD_TF;
+            d->e2 *= KD_TA;
             dur = .4f;
             break;
         }
@@ -93,11 +111,13 @@ static void drum_render(drum_t *d, int32_t *out, uint32_t n, float gain)
             float tone, raw, noise;
             d->ph += 180.f * tm * isr; if (d->ph >= 1.f) d->ph -= 1.f;
             d->ph2 += 330.f * tm * isr; if (d->ph2 >= 1.f) d->ph2 -= 1.f;
-            tone = (sin_t(d->ph) * .6f + sin_t(d->ph2) * .4f) * exp_f(-t / .085f);
+            tone = (sin_t(d->ph) * .6f + sin_t(d->ph2) * .4f) * d->e1;
             raw = drnd(d) * 2.f - 1.f;
             d->hp = raw - d->pn + .96f * d->hp; d->pn = raw;
             d->hp2 = d->hp - d->pn2 + .6f * d->hp2; d->pn2 = d->hp;   /* a second stage: drier noise */
-            noise = d->hp2 * exp_f(-t / .19f);
+            noise = d->hp2 * d->e2;
+            d->e1 *= KD_ST;
+            d->e2 *= KD_SN;
             s = SAT(tone * .55f + noise * .95f, 1.6f, 1.08498874f);
             dur = .34f;
             break;
@@ -112,7 +132,8 @@ static void drum_render(drum_t *d, int32_t *out, uint32_t n, float gain)
             d->hp = hs - d->pn + .92f * d->hp; d->pn = hs;
             d->hp2 = d->hp - d->pn2 + .85f * d->hp2; d->pn2 = d->hp;   /* two high-pass stages: the metal */
             dur = d->type == DR_CLHAT ? .09f : .42f;
-            s = d->hp2 * exp_f(-t / (dur * (d->type == DR_CLHAT ? .22f : .32f))) * .55f;
+            s = d->hp2 * d->e1 * .55f;
+            d->e1 *= d->type == DR_CLHAT ? KD_CH : KD_OH;
             break;
         }
         case DR_CLAP: {
@@ -121,7 +142,13 @@ static void drum_render(drum_t *d, int32_t *out, uint32_t n, float gain)
             d->hp = raw - d->pn + .92f * d->hp; d->pn = raw;
             for (k = 0; k < 4u; k++)
                 if (t >= B[k] && t < B[k] + .009f) { float e = 1.f - (t - B[k]) / .009f; if (e > env) env = e; }
-            if (t >= .045f) { float e = exp_f(-(t - .045f) / .13f) * .75f; if (e > env) env = e; }
+            if (t >= .045f) {
+                float e;
+                if (d->e2 == 1.f) d->e2 = exp_f(-(t - .045f) * (1.f / .13f));   /* the tail's first sample */
+                e = d->e2 * .75f;
+                d->e2 *= KD_CL;
+                if (e > env) env = e;
+            }
             s = SAT(d->hp * env, 1.3f, 1.16046550f) * .8f;
             dur = .3f;
             break;
@@ -132,7 +159,8 @@ static void drum_render(drum_t *d, int32_t *out, uint32_t n, float gain)
             d->ph2 += 845.f * tm * isr; if (d->ph2 >= 1.f) d->ph2 -= 1.f;
             sq1 = d->ph < .5f ? 1.f : -1.f;
             sq2 = d->ph2 < .5f ? 1.f : -1.f;
-            s = SAT((sq1 * .5f + sq2 * .5f) * exp_f(-t / .028f), 1.5f, 1.10479139f) * .42f;
+            s = SAT((sq1 * .5f + sq2 * .5f) * d->e1, 1.5f, 1.10479139f) * .42f;
+            d->e1 *= KD_RM;
             dur = .08f;
         }
         }
