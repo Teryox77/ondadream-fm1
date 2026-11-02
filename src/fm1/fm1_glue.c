@@ -11,9 +11,29 @@ extern uint32_t _data_start[], _data_end[], _data_load[], _bss_start[], _bss_end
 extern uint32_t _rt_start[], _rt_end[], _rt_load[], _pool_start[], _pool_end[];
 static uint8_t boot_rescue;                     /* two failed boots: the rescue (main.c), not OndaDream */
 
-static struct { uint32_t magic, pending, failed; } guard __attribute__((section(".noinit")));
+/* the boot-loop guard, kept across resets. A check word over it: RAM that only looks like a guard (a power-on, another
+ * firmware, the chip's update mode or the recovery tool's RAM helper writing there: an FM-1 once showed a guard with
+ * 233 failed boots and sent itself to UBOOT at every start) is taken for no guard at all */
+/* volatile and not static: for a static object the compiler may assume the C start value (zero) and rewrite or drop
+ * its loads and stores; here the value is whatever the last run left in RAM */
+volatile struct od_guard { uint32_t magic, pending, failed, check; } od_guard __attribute__((section(".noinit")));
+#define guard od_guard
+#define GUARD_MAGIC 0x4F445231u
+static uint32_t guard_sum(void) { return guard.magic ^ (guard.pending * 0x9E3779B1u) ^ (guard.failed * 0x85EBCA77u) ^ 0x5A5A5A5Au; }
+static void guard_set(uint32_t pending, uint32_t failed)
+{
+    guard.magic = GUARD_MAGIC;
+    guard.pending = pending;
+    guard.failed = failed;
+    guard.check = guard_sum();
+}
+static int guard_valid(void)
+{
+    return guard.magic == GUARD_MAGIC && guard.pending <= 1u && guard.failed <= 4u && guard.check == guard_sum();
+}
 /* how far each boot got (main.c BOOT_STAGE), kept across resets: the rescue screen shows the last ones */
-static struct { uint32_t magic; uint8_t stage, hist[4]; uint8_t p3_rst; } diag __attribute__((section(".noinit")));
+volatile struct od_diag { uint32_t magic; uint8_t stage, hist[4]; uint8_t p3_rst; } od_diag __attribute__((section(".noinit")));
+#define diag od_diag
 #define DIAG_MAGIC 0x4F444431u
 /* a boot log in the flash (survives power-off; the USB recovery tool's full backup carries it): one byte a step,
  * appended to the 4 KiB sector at FLOG (outside the app area the installers write, below every firmware's store),
@@ -164,8 +184,7 @@ static int ota_fread(uint32_t off, void *p, uint32_t n)
 }
 static void ota_commit(const uint8_t *parm)
 {
-    guard.pending = 0;                          /* an intentional reset, not a failed boot */
-    guard.failed = 0;
+    guard_set(0, 0);                            /* an intentional reset, not a failed boot */
     usb_detach();
     fm1_delay_ms(30);
     fm1_enter_update(parm);
@@ -193,8 +212,7 @@ static void fm1_fault(const fm1_crash_t *c)
 
 static void boot_healthy(void)                  /* the main loop runs: the next boot is not a loop */
 {
-    guard.pending = 0;
-    guard.failed = 0;
+    guard_set(0, 0);
 }
 
 static void app_main(void);
@@ -221,14 +239,9 @@ void fm1_cstart(void)
     diag.hist[0] = diag.stage;
     diag.stage = 1;
     diag.p3_rst = fm1_boot.p3_rst;
-    if (guard.magic != 0x4F445231u) {
-        guard.magic = 0x4F445231u;
-        guard.failed = 0;
-        guard.pending = 0;
-    }
-    if (guard.pending)
-        guard.failed++;
-    guard.pending = 1;
+    if (!guard_valid())
+        guard_set(0, 0);
+    guard_set(1, guard.failed + (guard.pending ? 1u : 0u));
     uboot_due = guard.failed >= 4u;             /* the rescue failed too: the chip's own update mode (after the log) */
     fm1_irq_init();
     for (d = _bss_start; d < _bss_end; d++)
@@ -247,8 +260,7 @@ void fm1_cstart(void)
     flog((uint8_t)guard.failed);
     if (uboot_due) {
         flog(0xDB);
-        guard.failed = 0;
-        guard.pending = 0;
+        guard_set(0, 0);
         fm1_enter_uboot();
     }
     fm1_guard_enable(FM1_GUARD_STACK | FM1_GUARD_WRITE | FM1_GUARD_BUS | FM1_GUARD_PC);
