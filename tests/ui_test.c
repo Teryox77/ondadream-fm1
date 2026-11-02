@@ -116,6 +116,24 @@ int main(void)
         if (bad) { printf("save: %d failures\n", bad); return 1; }
         printf("save ok\n");
     }
+    {   /* the battery: the stock thresholds, the hysteresis, USB */
+        static const struct { int32_t raw; int usb, lvl; } B[] = {{640, 0, 3}, {592, 0, 3}, {590, 0, 3}, {587, 0, 2},
+            {592, 0, 2}, {594, 0, 3}, {560, 0, 2}, {557, 0, 1}, {540, 0, 1}, {527, 0, 0}, {532, 0, 0}, {534, 0, 1}, {500, 0, 0}};
+        int bad = 0;
+        uint32_t k;
+        for (k = 0; k < sizeof B / sizeof B[0]; k++) {
+            od_battery(B[k].raw, B[k].usb);
+            if (batt_lvl != B[k].lvl) { printf("battery %d: %d bars, not %d\n", (int)B[k].raw, batt_lvl, B[k].lvl); bad++; }
+        }
+        od_button(OB_HOME, 1);
+        od_battery(640, 0); od_frame(frame); save("batt_3");
+        od_battery(545, 0); od_frame(frame); save("batt_1");
+        od_battery(500, 0); od_frame(frame); save("batt_0");
+        od_battery(600, 1); od_frame(frame); save("batt_usb");
+        od_button(OB_GLO, 1); od_frame(frame); save("glo_batt");
+        if (bad) { printf("battery: %d failures\n", bad); return 1; }
+        printf("battery ok\n");
+    }
     printf("ok, %u ms\n", now_ms);
     return 0;
 }

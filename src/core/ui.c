@@ -29,6 +29,9 @@ static int knob_touch = -1;
 static uint32_t knob_touch_ms, toast_ms, boot_ms;
 static char toast_txt[24];
 static uint32_t keys_down;               /* the panel's keys held (bit k) */
+static int32_t batt_raw = -1;            /* the platform's reading, filtered; -1 none (the browser: full) */
+static int batt_lvl = 3;
+static uint8_t batt_usb;
 static uint8_t midi_held[128];
 #define KB_BASE 53                       /* key 0 = F3 */
 #define SPLASH_MS 1200u
@@ -739,8 +742,9 @@ static uint32_t st_fps, st_cpu;
 void od_stats(uint32_t fps, uint32_t cpu) { st_fps = fps; st_cpu = cpu; }
 static void dr_glo(float W, float H)
 {
-    static const char *const K[9] = {"FIRMWARE", "ENGINE", "VOICES", "VOLUME", "OCTAVE", "HOLD", "ARP AI", "SCREEN", "TEST"};
-    char v[9][64];
+    static const char *const K[10] = {"FIRMWARE", "ENGINE", "VOICES", "VOLUME", "OCTAVE", "HOLD", "ARP AI", "SCREEN", "TEST",
+        "BATTERY"};
+    char v[10][64];
     int i;
     (void)W; (void)H;
     cat(cat(v[0], "ONDADREAM "), OD_VERSION);
@@ -752,7 +756,9 @@ static void dr_glo(float W, float H)
     cat(v[6], ai_on ? "ON" : "OFF");
     { char *e = fmt_i(v[7], (int)st_fps); e = cat(e, " FPS  CPU "); e = fmt_i(e, (int)st_cpu); cat(e, " %"); }
     cat(v[8], od_test_txt);
-    for (i = 0; i < 9; i++) {
+    if (batt_raw < 0) cat(v[9], "-");
+    else { char *e = cat(v[9], batt_usb ? "USB" : ""); if (!batt_usb) { e = fmt_i(e, batt_lvl); e = cat(e, "/3"); } e = cat(e, "  ADC "); fmt_i(e, batt_raw); }
+    for (i = 0; i < 10; i++) {
         text(&F_SILK8, 10, 14.f + (float)i * 15.f, K[i], C_FAINT, TA_L);
         text(&F_PX10, 230, 14.f + (float)i * 15.f, v[i], hexc(0xE9EBEE), TA_R);
     }
@@ -860,11 +866,36 @@ static void dr_mix(void)                         /* (in the scene: from y 19) */
     }
 }
 
+/* ---- the battery (top right, where the preview has its level meter): the FM-1's own thresholds on the battery's
+ * ADC (531 / 561 / 591: 0..3 bars, as the stock firmware), a bolt on USB power ---- */
+void od_battery(int32_t raw, int usb)
+{
+    static const int32_t T[3] = {531, 561, 591};
+    int l = 0;
+    batt_raw = raw;
+    batt_usb = (uint8_t)(usb != 0);
+    while (l < 3 && raw >= T[l] + (l >= batt_lvl ? 3 : -3)) l++;   /* (3 counts of hysteresis: no flicker on a step) */
+    batt_lvl = l;
+}
+static void dr_battery(void)
+{
+    static const uint8_t BOLT[7][2] = {{222, 2}, {221, 2}, {220, 2}, {218, 6}, {220, 2}, {219, 2}, {218, 2}};   /* x, width */
+    uint16_t ink = batt_lvl || batt_usb ? C_INK : C_RED, bar = batt_lvl >= 2 ? C_GREEN : batt_lvl == 1 ? C_ORANGE : C_RED;
+    int i;
+    fill_rect(210, 4, 22, 1, ink); fill_rect(210, 12, 22, 1, ink);   /* the body, 22 x 9, and its tip */
+    fill_rect(210, 4, 1, 9, ink); fill_rect(231, 4, 1, 9, ink);
+    fill_rect(232, 6, 2, 5, ink);
+    if (batt_usb) {                              /* USB power: a bolt */
+        for (i = 0; i < 7; i++) fill_rect(BOLT[i][0], 5 + i, BOLT[i][1], 1, C_GREEN);
+        return;
+    }
+    for (i = 0; i < batt_lvl; i++) fill_rect(212 + i * 6, 6, 5, 5, bar);
+}
+
 /* ---- the frame's parts ---- */
 static void dr_header(void)
 {
     char b[24], *e;
-    int i, lit;
     if (viz_for != preset_idx) viz_make(preset_idx);
     e = cat(b, "PRESET ");
     if (preset_idx + 1 < 10) *e++ = '0';
@@ -873,8 +904,7 @@ static void dr_header(void)
     fmt_i(e, n_presets());
     text(&F_SILK8, 5, 12, b, C_INK, TA_L);
     text(&F_SILK8, 150, 12, PG_TITLE[page], viz.accent, TA_C);
-    lit = (int)((float)lvl_peak / 32767.f * 6.f + .5f);
-    for (i = 0; i < 6; i++) fill_rect(203 + i * 6, 5, 4, 7, i < lit ? (i < 4 ? C_GREEN : C_RED) : hexc(0x2C2F34));
+    dr_battery();
     fill_rect(0, 17, 240, 1, hexc(0x1E2024));
 }
 static void dr_cards(uint32_t now)

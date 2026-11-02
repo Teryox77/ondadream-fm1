@@ -340,7 +340,8 @@ static int store_save(void)
 /* ---- the main loop ---- */
 static void app_main(void)
 {
-    uint32_t i, leds_k = ~0u, leds_b = ~0u, last_adc = 0, last_frame = 0, last_stat = 0, frames = 0;
+    uint32_t i, leds_k = ~0u, leds_b = ~0u, last_adc = 0, last_frame = 0, last_stat = 0, frames = 0, last_batt = 0;
+    int32_t batt = -1;                          /* x 16 */
     int32_t master = -100;
     uint8_t healthy = 0;
     {
@@ -437,6 +438,14 @@ static void app_main(void)
                 if ((b ^ leds_b) & (1u << i))
                     fm1_led_key(BTN_ID[i], (int)((b >> i) & 1u));
             leds_b = b;
+        }
+        if (now - last_batt >= 250u) {          /* the battery: a slow average (~4 s), and USB power */
+            int32_t v = fm1_adc_read(FM1_ADC_BATT);
+            last_batt = now;
+            if (v > 0) {
+                batt = batt < 0 ? v * 16 : batt + v - batt / 16;
+                od_battery(batt / 16, usb.config && !usb.suspended);
+            }
         }
         if (od_store_dirty())                   /* SAVE */
             od_store_done(store_save());
