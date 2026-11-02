@@ -19,8 +19,9 @@ static void pal_init(void)
 }
 
 /* ---------------------------------------------------------------- state --- */
-enum { PG_SYNTH, PG_FILTER, PG_ENV, PG_MOD, PG_ARP, PG_FX, PG_GLO, PG_N };
-static const char *const PG_TITLE[PG_N] = {"HOME", "FILTER", "ENVELOPE", "LFO", "ARPEGGIO", "EFFECTS", "GLOBAL"};
+enum { PG_SYNTH, PG_FILTER, PG_ENV, PG_MOD, PG_ARP, PG_FX, PG_SEQ, PG_MIX, PG_GLO, PG_N };
+static const char *const PG_TITLE[PG_N] = {"HOME", "FILTER", "ENVELOPE", "LFO", "ARPEGGIO", "EFFECTS", "SEQUENCER", "MIXER",
+    "GLOBAL"};
 static int page = PG_SYNTH;
 static uint8_t hold;
 static int oct_shift;
@@ -72,6 +73,7 @@ static void pct_txt(char *b, float v) { cat(fmt_i(b, (int32_t)(v * 100.f + .5f))
 static const char *const WAVE_NAMES[4] = {"SAW", "SQUARE", "TRI", "SINE"};
 static const char *const ARP_NAMES[5] = {"OFF", "UP", "DOWN", "UP-DN", "RANDOM"};
 static const char *const NOTE_NAMES[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+static void note_txt(char *b, int n) { fmt_i(cat(b, NOTE_NAMES[n % 12]), n / 12 - 1); }   /* midiName */
 
 static float exp_map(float v, float l, float h) { return l * od_exp2(v * od_log2(h / l)); }
 static float exp_unmap(float x, float l, float h) { if (x < l) x = l; return od_log2(x / l) / od_log2(h / l); }
@@ -79,14 +81,22 @@ static float clampf(float x, float l, float h) { return x < l ? l : x > h ? h : 
 
 /* ---------------------------------------------------------------- the knobs of each page --- */
 enum { K_WAVE, K_DETUNE, K_MIX, K_DRIVE, K_CUT, K_RESO, K_FENV, K_KTRK, K_A, K_D, K_S, K_R, K_LFO, K_VIB, K_LFOCUT,
-       K_FDEC, K_APAT, K_ABPM, K_AOCT, K_AGATE, K_CHO, K_ECO, K_ETIME, K_REV, K_VOL, K_OCT, K_TEMPO, K_AI };
+       K_FDEC, K_APAT, K_ABPM, K_AOCT, K_AGATE, K_CHO, K_ECO, K_ETIME, K_REV, K_VOL, K_OCT, K_TEMPO, K_AI,
+       K_SQBPM, K_SQLVL, K_SQSND, K_SQNOTE, K_MXVOL, K_MXPAN, K_MXFX, K_MXMUTE };
 static const uint8_t PG_K[PG_N][4] = {
     {K_WAVE, K_DETUNE, K_MIX, K_DRIVE}, {K_CUT, K_RESO, K_FENV, K_KTRK}, {K_A, K_D, K_S, K_R},
     {K_LFO, K_VIB, K_LFOCUT, K_FDEC}, {K_APAT, K_ABPM, K_AOCT, K_AGATE}, {K_CHO, K_ECO, K_ETIME, K_REV},
-    {K_VOL, K_OCT, K_TEMPO, K_AI}};
+    {K_SQBPM, K_SQLVL, K_SQSND, K_SQNOTE}, {K_MXVOL, K_MXPAN, K_MXFX, K_MXMUTE}, {K_VOL, K_OCT, K_TEMPO, K_AI}};
 static const char *const K_LBL[] = {"Wave", "Detune", "Mix", "Drive", "Cutoff", "Reso", "Env", "KeyTrk", "Attack",
     "Decay", "Sustain", "Release", "LFO", "Vibrato", "LFO>Cut", "F.Decay", "Pattern", "Tempo", "Octaves", "Gate",
-    "Chorus", "Echo", "Time", "Reverb", "Volume", "Octave", "Tempo", "Arp AI"};
+    "Chorus", "Echo", "Time", "Reverb", "Volume", "Octave", "Tempo", "Arp AI", "Tempo", "Level", "Sound", "Note",
+    "Volume", "Pan", "Reverb", "Mute"};
+static const char *k_lbl(int k)          /* (SEQUENCER: the drums' knobs say what they do there) */
+{
+    if (!sel_track && k == K_SQSND) return "Inst";
+    if (!sel_track && k == K_SQNOTE) return "Rhythm";
+    return K_LBL[k];
+}
 static void ai_apply(void);
 static float k_get(int k)
 {
@@ -118,6 +128,14 @@ static float k_get(int k)
     case K_VOL: return P.vol;
     case K_OCT: return (float)(oct_shift + 3) / 6.f;
     case K_AI: return ai_on ? 1.f : 0.f;
+    case K_SQBPM: return (float)(sq.bpm - 40) / 200.f;
+    case K_SQLVL: return tr[sel_track].vol;
+    case K_SQSND: return sel_track ? (float)tr[sel_track].preset / (float)(OD_NPRESETS - 1) : (float)sel_drum / 7.f;
+    case K_SQNOTE: return sel_track ? (float)tr[sel_track].sel_note / (float)(PIANO_ROWS - 1) : (float)rhythm_idx / (float)(NRHY - 1);
+    case K_MXVOL: return tr[sel_track].vol;
+    case K_MXPAN: return (tr[sel_track].pan + 1.f) / 2.f;
+    case K_MXFX: return tr[sel_track].fx;
+    case K_MXMUTE: return tr[sel_track].mute ? 1.f : 0.f;
     }
     return 0.f;
 }
@@ -152,6 +170,19 @@ static void k_set(int k, float v)
     case K_VOL: P.vol = v; break;
     case K_OCT: oct_shift = (int)(v * 6.f + .5f) - 3; break;
     case K_AI: { int on = v > .5f; if (on != ai_on) { ai_on = (uint8_t)on; if (on) ai_apply(); } } break;
+    case K_SQBPM: sq.bpm = (int)(40.f + v * 200.f + .5f); break;
+    case K_SQLVL: case K_MXVOL: tr[sel_track].vol = v; break;
+    case K_SQSND:
+        if (sel_track) tr[sel_track].preset = (int)(v * (float)(OD_NPRESETS - 1) + .5f);
+        else sel_drum = (int)(v * 7.f + .5f);
+        break;
+    case K_SQNOTE:
+        if (sel_track) tr[sel_track].sel_note = (int)(v * (float)(PIANO_ROWS - 1) + .5f);
+        else { int i = (int)(v * (float)(NRHY - 1) + .5f); if (i != rhythm_idx) set_rhythm(i); }
+        break;
+    case K_MXPAN: tr[sel_track].pan = v * 2.f - 1.f; break;
+    case K_MXFX: tr[sel_track].fx = v; break;
+    case K_MXMUTE: seq_mute(sel_track, v > .5f); break;
     }
 }
 static void k_txt(int k, char *b)
@@ -184,6 +215,27 @@ static void k_txt(int k, char *b)
     case K_VOL: pct_txt(b, P.vol); break;
     case K_OCT: { char *e = b; if (oct_shift > 0) *e++ = '+'; fmt_i(e, oct_shift); } break;
     case K_AI: cat(b, ai_on ? "ON" : "OFF"); break;
+    case K_SQBPM: fmt_i(b, sq.bpm); break;
+    case K_SQLVL: fmt_i(b, (int32_t)(tr[sel_track].vol * 100.f + .5f)); break;
+    case K_SQSND:
+        if (!sel_track) cat(b, DRUM_ABBR[sel_drum]);
+        else { char *e = b; if (tr[sel_track].preset + 1 < 10) *e++ = '0'; fmt_i(e, tr[sel_track].preset + 1); }
+        break;
+    case K_SQNOTE:
+        if (!sel_track) fmt_i(b, rhythm_idx + 1);
+        else note_txt(b, SEQ_LOW + tr[sel_track].sel_note);
+        break;
+    case K_MXVOL: pct_txt(b, tr[sel_track].vol); break;
+    case K_MXPAN: {
+        float f = tr[sel_track].pan * 50.f + .5f;
+        int32_t q = (int32_t)f;                                   /* Math.round: floor(x + .5) */
+        if ((float)q > f) q--;
+        if (!q) cat(b, "C");
+        else { b[0] = q < 0 ? 'L' : 'R'; fmt_i(b + 1, q < 0 ? -q : q); }
+        break;
+    }
+    case K_MXFX: pct_txt(b, tr[sel_track].fx); break;
+    case K_MXMUTE: cat(b, tr[sel_track].mute ? "ON" : "OFF"); break;
     default: b[0] = 0;
     }
 }
@@ -705,6 +757,108 @@ static void dr_glo(float W, float H)
     }
 }
 
+/* ---- SEQUENCER (the whole screen) and MIXER ---- */
+static const uint8_t DISP[NTR] = {1, 2, 3, 0};   /* the tracks as shown: 1, 2, 3, D */
+static int slot_of(int t) { int d; for (d = 0; d < (int)NTR; d++) if (DISP[d] == t) return d; return 0; }
+static const uint32_t TRACK_DARK[NTR] = {0x123063, 0x0B4A33, 0x5A3A10, 0x5C1626};
+static uint16_t shade(uint16_t c, float f)       /* the preview's shade(): each channel x f, floored (in 8 bits) */
+{
+    uint32_t r = (uint32_t)(c >> 11) * 255u / 31u, g = (uint32_t)((c >> 5) & 63u) * 255u / 63u, b = (uint32_t)(c & 31u) * 255u / 31u;
+    return RGB((uint32_t)((float)r * f), (uint32_t)((float)g * f), (uint32_t)((float)b * f));
+}
+static void lower(char *d, const char *s) { while (*s) { *d++ = (char)(*s >= 'A' && *s <= 'Z' ? *s + 32 : *s); s++; } *d = 0; }
+static const char *track_name(int t) { return t ? OD_PRESETS[tr[t].preset].name : RHYTHMS[rhythm_idx].name; }
+static void cut(char *d, const char *s, int n) { int i; for (i = 0; i < n && s[i]; i++) d[i] = s[i]; d[i] = 0; }
+static void dr_seq_full(uint32_t now)
+{
+    static const int ROW_Y[NTR] = {41, 80, 119, 158};
+    char b[24], c2[24];
+    int st = sq.vis, d, i, k;
+    float bw;
+    fill_rect(0, 0, 240, 240, 0);
+    /* the top: the tempo, the position, rec */
+    fmt_i(b, sq.bpm);
+    text(&F_PX30, 6, 30, b, hexc(0xE8EAED), TA_L);
+    bw = (float)text_w16(&F_PX30, b) / 16.f;
+    text(&F_PX10, 10.f + bw, 30, "bpm", hexc(0x9AA0A8), TA_L);
+    if (sq.playing) fill_tri(116, 9, 128, 16, 116, 23, hexc(0xFFFFFF), 1.f);
+    else fill_rect(116, 10, 11, 11, hexc(0x9AA0A8));
+    if (st >= 0) { char *e = fmt_i(b, st / 4 + 1); *e++ = '.'; fmt_i(e, st % 4 + 1); }
+    else cat(b, "1.1");
+    text(&F_PX13, 133, 22, b, hexc(0xE8EAED), TA_L);
+    for (i = 0; i < 4; i++) fill_rect(116 + i * 9, 28, 6, 6, st >= 0 && st / 4 == i ? hexc(0xFF3355) : hexc(0x3A1F26));
+    gs.alpha = rec_on ? 1.f : .35f;
+    text(&F_PX11, 185, 20, "rec", hexc(0xFF3355), TA_L);
+    fill_circle(226, 16, 8, hexc(0xFF3355), gs.alpha);
+    if (rec_on && (now / 450u) % 2u) fill_circle(226, 16, 3, hexc(0xFFB3BF), 1.f);
+    gs.alpha = 1.f;
+    /* the tracks */
+    for (d = 0; d < (int)NTR; d++) {
+        int t = DISP[d], y = ROW_Y[d], sel = t == sel_track, muted = tr[t].mute, c;
+        uint16_t tc = ACCENTS[t], box = sel ? tc : hexc(TRACK_DARK[t]);
+        float nmw;
+        fill_rect(6, y + 1, 22, 27, box);
+        fill_rect(6, y + 1, 22, 1, tc); fill_rect(6, y + 27, 22, 1, tc);
+        fill_rect(6, y + 1, 1, 27, tc); fill_rect(27, y + 1, 1, 27, tc);
+        b[0] = t ? (char)('0' + d + 1) : 'D'; b[1] = 0;
+        text(&F_PX14, 17, (float)y + 20.f, b, sel ? hexc(0xFFFFFF) : tc, TA_C);
+        cut(b, track_name(t), 11);
+        text(&F_PX11, 34, (float)y + 11.f, b, muted ? hexc(0x5D6168) : hexc(0xE8EAED), TA_L);
+        nmw = (float)text_w16(&F_PX11, b) / 16.f;
+        if (muted) cat(c2, "mute");
+        else if (!t) { char u[8]; lower(u, DRUM_ABBR[sel_drum]); cat(cat(c2, "808 "), u); }
+        else { note_txt(b, SEQ_LOW + tr[t].sel_note); lower(c2, b); }
+        text(&F_PX9, 38.f + nmw, (float)y + 11.f, c2, muted ? hexc(0xFF3355) : tc, TA_L);
+        if (sel && rec_on) {
+            fill_rect(203, y + 1, 32, 12, hexc(0xFF3355));
+            text(&F_PX9, 219, (float)y + 10.f, "rec", hexc(0xFFFFFF), TA_C);
+        }
+        for (c = 0; c < 16; c++) {               /* the steps: x0 34, 10.2 px each */
+            int on = track_on_at(t, c), hi = sel && sel_step_on(t, c), x = (int)(34.f + (float)c * 10.2f + .5f);
+            float a = muted ? .35f : 1.f;
+            uint16_t col = hi ? tc : on ? (sel ? shade(tc, .55f) : tc) : hexc(c % 4 == 0 ? 0x262A31 : 0x1A1D22);
+            if (on && !sel) a *= .85f;
+            if (a >= 1.f) fill_rect(x, y + 15, 8, 7, col);
+            else fill_rect_a(x, y + 15, 8, 7, col, (uint32_t)(a * 256.f));
+        }
+        if (st >= 0) fill_rect((int)(34.f + (float)st * 10.2f + .5f), y + 24, 8, 2, hexc(0xFFFFFF));
+        fill_rect(203, y + 17, 32, 4, hexc(0x2A2D33));     /* the level */
+        fill_rect(203, y + 17, (int)(32.f * tr[t].vol + .5f), 4, sel ? tc : hexc(0x8A8F97));
+    }
+    /* the knobs */
+    for (k = 0; k < 4; k++) {
+        int id = PG_K[PG_SEQ][k];
+        float cx = 30.f + (float)k * 60.f, cy = 208.f, v = clampf(k_get(id), 0.f, 1.f), a = 3.14159265f * (.75f + 1.5f * v);
+        arc_butt(cx, cy, 10, 4, 3.14159265f * .75f, 3.14159265f * 2.25f, hexc(0x2C2F34));
+        arc_butt(cx, cy, 10, 4, 3.14159265f * .75f, a, KNOB_COL[k]);
+        line_butt(cx, cy, cx + g_cos(a) * 7.f, cy + g_sin(a) * 7.f, 2, hexc(0xFFFFFF));
+        lower(b, k_lbl(id));
+        text(&F_PX10, cx, cy + 20.f, b, C_INK, TA_C);
+        k_txt(id, b);
+        text(&F_PX10, cx, cy + 31.f, b, hexc(0xE8EAED), TA_C);
+    }
+}
+static void dr_mix(void)                         /* (in the scene: from y 19) */
+{
+    int d;
+    char b[16];
+    for (d = 0; d < (int)NTR; d++) {
+        int t = DISP[d], x = d * 60, muted = tr[t].mute, hit, vh, bx = x + 22, by = 34 + 19, bh = 84;
+        uint16_t tc = ACCENTS[t];
+        if (t == sel_track) { fill_rect(x + 8, 19, 44, 142, hexc(0x1B1E24)); fill_rect(x + 8, 19, 44, 2, tc); }
+        if (t) { b[0] = 'T'; b[1] = 'R'; b[2] = (char)('0' + d + 1); b[3] = 0; } else cat(b, "DRUM");
+        text(&F_SILK8, (float)x + 30.f, 14.f + 19.f, b, tc, TA_C);
+        cut(b, track_name(t), 7);
+        text(&F_SILK6, (float)x + 30.f, 26.f + 19.f, b, hexc(0x9AA0A8), TA_C);
+        hit = sq.vis >= 0 && track_on_at(t, sq.vis) && !muted;
+        fill_rect(bx, by, 16, bh, hexc(0x1D2026));
+        vh = (int)((float)bh * tr[t].vol + .5f);
+        fill_rect_a(bx, by + bh - vh, 16, vh, muted ? hexc(0x3A3D42) : tc, hit ? 256u : 192u);
+        if (hit) fill_rect(bx, by + bh - vh, 16, 2, hexc(0xFFFFFF));
+        text(&F_SILK8, (float)x + 30.f, 134.f + 19.f, muted ? "MUTE" : "ON", muted ? C_RED : C_INK, TA_C);
+    }
+}
+
 /* ---- the frame's parts ---- */
 static void dr_header(void)
 {
@@ -734,7 +888,7 @@ static void dr_cards(uint32_t now)
         text(&F_SILK8, (float)x + 30.f, 180, KL[k], C_LABEL, TA_C);
         fill_rect(x + 1, y, 58, 56, on ? C_CARDHOT : C_CARD);
         fill_rect(x + 1, y, 58, 2, col);
-        for (i = 0; K_LBL[id][i] && i < 7; i++) u[i] = (char)(K_LBL[id][i] >= 'a' && K_LBL[id][i] <= 'z' ? K_LBL[id][i] - 32 : K_LBL[id][i]);
+        for (i = 0; k_lbl(id)[i] && i < 7; i++) u[i] = (char)(k_lbl(id)[i] >= 'a' && k_lbl(id)[i] <= 'z' ? k_lbl(id)[i] - 32 : k_lbl(id)[i]);
         u[i] = 0;
         text(&F_SILK8, (float)x + 30.f, (float)y + 14.f, u, col, TA_C);
         k_txt(id, b);
@@ -803,6 +957,13 @@ static void dr_splash(uint32_t t)
 
 /* ---------------------------------------------------------------- the frame --- */
 int od_splash(void) { return od_ms() - boot_ms < SPLASH_MS; }
+static void dr_toast(uint32_t now)
+{
+    if (toast_ms && now - toast_ms < 900u) {
+        fill_rect_a(20, 150, 200, 22, hexc(0x08090C), 235);
+        text(&F_SILK8, 120, 165, toast_txt, C_ORANGE, TA_C);
+    }
+}
 int od_frame(uint16_t *frame)
 {
     uint32_t now = od_ms();
@@ -811,6 +972,11 @@ int od_frame(uint16_t *frame)
     g_reset();
     if (od_splash()) {
         dr_splash(now - boot_ms);
+        return 1;
+    }
+    if (page == PG_SEQ) {                       /* the whole screen */
+        dr_seq_full(now);
+        dr_toast(now);
         return 1;
     }
     fill_rect(0, 0, 240, 240, C_BG);
@@ -829,15 +995,15 @@ int od_frame(uint16_t *frame)
     case PG_MOD: dr_mod(240, 157, now); break;
     case PG_ARP: dr_arp(240, 157, now); break;
     case PG_FX: dr_fx(240, 157, now); break;
+    case PG_MIX: break;
     default: dr_glo(240, 157);
     }
     g_restore();
+    if (page == PG_MIX) dr_mix();
     fill_rect(0, 176, 240, 64, C_BG);          /* (the scene stays above the cards) */
     dr_cards(now);
-    if (toast_ms && now - toast_ms < 900u) {
-        fill_rect_a(20, 150, 200, 22, hexc(0x08090C), 235);
-        text(&F_SILK8, 120, 165, toast_txt, C_ORANGE, TA_C);
-    }
+    if (sq.playing && page != PG_MIX && sq.vis >= 0) fill_rect(sq.vis * 15, 176, 14, 2, C_GREEN);   /* the step */
+    dr_toast(now);
     return 1;
 }
 
@@ -877,20 +1043,71 @@ void od_init(void)
     pal_init();
     stars_init();
     synth_init();
+    seq_init();
     boot_ms = od_ms();
+}
+/* REC: with the sequencer playing, the notes played go to the chosen track, on the step now */
+static void key_on(int n, float vel);
+static void record_note(int n)
+{
+    int col = sq.vis, p;
+    if (!rec_on || !sq.playing || col < 0) return;
+    if (!sel_track) { if (!drum_has(sel_drum, col)) drum_toggle(sel_drum, col); return; }
+    p = n - SEQ_LOW;
+    if (p >= 0 && p < PIANO_ROWS) { tr[sel_track].grid[p] |= (uint16_t)(1u << col); tr[sel_track].sel_note = p; }
+}
+static void audition_drum(int type)
+{
+    uint32_t k;
+    drum_t *d = &dv[0];
+    for (k = 0; k < DRUM_POLY; k++)
+        if (!dv[k].active) { d = &dv[k]; break; }
+    drum_trigger(d, (uint8_t)type, 1.f);
+}
+static void step_key(int col)                    /* SEQUENCER: a white key, a step of the track */
+{
+    if (!sel_track) {
+        if (drum_toggle(sel_drum, col) && !sq.playing) audition_drum(sel_drum);
+    } else {
+        uint16_t *g = &tr[sel_track].grid[tr[sel_track].sel_note];
+        *g ^= (uint16_t)(1u << col);
+        if ((*g >> col & 1u) && !sq.playing) {   /* hear it: the keyboard's sound, 180 ms */
+            int n = SEQ_LOW + tr[sel_track].sel_note, k;
+            key_on(n, .8f);
+            for (k = 0; k < 4; k++)
+                if (!aud[k].note) { aud[k].note = (int8_t)n; aud[k].ms = od_ms(); break; }
+        }
+    }
+}
+/* the keys' places: white or black, counted from the left (the FM-1's keyboard starts on F) */
+static const int8_t KEY_WHITE[27] = {0, -1, 1, -1, 2, -1, 3, 4, -1, 5, -1, 6, 7, -1, 8, -1, 9, -1, 10, 11, -1, 12, -1, 13, 14, -1, 15};
+static const int8_t KEY_BLACK[27] = {-1, 0, -1, 1, -1, 2, -1, -1, 3, -1, 4, -1, -1, 5, -1, 6, -1, 7, -1, -1, 8, -1, 9, -1, -1, 10, -1};
+static int step_mode(void) { return page == PG_SEQ || page == PG_MIX; }
+static void step_press(uint32_t k)
+{
+    int wi = KEY_WHITE[k], bi = KEY_BLACK[k];
+    if (page == PG_SEQ) {
+        if (wi >= 0) step_key(wi);
+        else if (bi < 4) sel_track = DISP[bi];
+        else if (!sel_track) { sel_drum = (bi - 4) % 8; audition_drum(sel_drum); }
+    } else {
+        if (wi >= 0 && wi < 4) { int t = DISP[wi]; seq_mute(t, !tr[t].mute); }
+        else if (bi >= 0 && bi < 4) sel_track = DISP[bi];
+    }
 }
 void od_key(uint32_t k, int down)
 {
     int n;
     if (k >= 27u) return;
     n = KB_BASE + 12 * oct_shift + (int)k;
-    if (down) { keys_down |= 1u << k; key_on(n, .85f); }
-    else { keys_down &= ~(1u << k); key_off(n); }
+    if (down && step_mode() && !od_splash()) { step_press(k); return; }   /* SEQUENCER / MIXER: the keys are steps */
+    if (down) { keys_down |= 1u << k; key_on(n, .85f); record_note(n); }
+    else if (keys_down >> k & 1u) { keys_down &= ~(1u << k); key_off(n); }
 }
 void od_midi(uint8_t st, uint8_t d1, uint8_t d2)
 {
     uint8_t c = st & 0xF0u;
-    if (c == 0x90u && d2) { midi_held[d1 & 127u] = 1; key_on(d1 & 127u, (float)d2 / 127.f); }
+    if (c == 0x90u && d2) { midi_held[d1 & 127u] = 1; key_on(d1 & 127u, (float)d2 / 127.f); record_note(d1 & 127u); }
     else if (c == 0x80u || (c == 0x90u && !d2)) { midi_held[d1 & 127u] = 0; key_off(d1 & 127u); }
 }
 static void set_page(int p) { page = p; }
@@ -910,12 +1127,15 @@ void od_button(uint32_t b, int down)
         if (!hold) { int i; for (i = arp.nheld - 1; i >= 0; i--) { int n = arp.held[i]; if (!(n >= KB_BASE + 12 * oct_shift && n < KB_BASE + 12 * oct_shift + 27 && (keys_down >> (n - KB_BASE - 12 * oct_shift) & 1u)) && !midi_held[n & 127]) { held_remove(n); direct_off(n); } } }
         toast(hold ? "HOLD ON" : "HOLD OFF");
         break;
-    case OB_REC:
-        ai_on = (uint8_t)!ai_on;
-        if (ai_on) ai_apply();
-        toast(ai_on ? "ARP AI ON" : "ARP AI OFF");
+    case OB_SEQ: set_page(page == PG_SEQ ? PG_MIX : PG_SEQ); break;
+    case OB_PLAY:
+        if (sq.playing) seq_stop(); else seq_play();
+        toast(sq.playing ? "PLAY" : "STOP");
         break;
-    case OB_SEQ: case OB_PLAY: toast("SEQUENCER: NEXT VERSION"); break;
+    case OB_REC:
+        rec_on = (uint8_t)!rec_on;
+        toast(rec_on ? "REC: PLAY THE KEYS" : "REC OFF");
+        break;
     case OB_SAVE: toast("SAVE: NEXT VERSION"); break;
     case OB_OCTDN: case OB_OCTUP:
         oct_shift = oct_shift + (b == OB_OCTUP ? 1 : -1);
@@ -935,10 +1155,17 @@ void od_enc(uint32_t e, int32_t s)
     switch (e) {
     case OE_PRESET: preset_go(preset_idx + s); break;
     case OE_SELECT: { int p = page + (s > 0 ? 1 : -1); set_page((p + PG_N) % PG_N); } break;
-    case OE_ALGO: P.wave = (float)CLAMP((int32_t)(P.wave + .5f) + s, 0, 3); break;
+    case OE_ALGO:
+        if (step_mode()) sel_track = DISP[CLAMP(slot_of(sel_track) + s, 0, (int)NTR - 1)];   /* the track */
+        else P.wave = (float)CLAMP((int32_t)(P.wave + .5f) + s, 0, 3);
+        break;
     default: {
         int k = (int)e - OE_K1, id = PG_K[page][k];
-        float step = (id == K_WAVE ? 1.f / 3.f : id == K_APAT ? .25f : id == K_AOCT ? .5f : id == K_OCT ? 1.f / 6.f : id == K_AI ? 1.f : 1.f / 128.f);
+        float step = id == K_WAVE ? 1.f / 3.f : id == K_APAT ? .25f : id == K_AOCT ? .5f : id == K_OCT ? 1.f / 6.f
+                   : id == K_AI || id == K_MXMUTE ? 1.f : id == K_SQBPM ? 1.f / 200.f
+                   : id == K_SQLVL || id == K_MXVOL || id == K_MXPAN || id == K_MXFX ? 1.f / 100.f
+                   : id == K_SQSND ? (sel_track ? 1.f / (float)(OD_NPRESETS - 1) : 1.f / 7.f)
+                   : id == K_SQNOTE ? (sel_track ? 1.f / (float)(PIANO_ROWS - 1) : 1.f / (float)(NRHY - 1)) : 1.f / 128.f;
         int32_t a = s < 0 ? -s : s;
         if (step < .01f && a > 2) step *= (float)(a > 6 ? 4 : 2);   /* acceleration */
         k_set(id, k_get(id) + step * (float)s);
@@ -951,6 +1178,23 @@ void od_master(uint32_t v) { master_v = (float)v / 1023.f; }
 uint32_t od_leds_keys(void)              /* bit k: key k lit */
 {
     uint32_t m = keys_down, base = (uint32_t)(KB_BASE + 12 * oct_shift), i;
+    if (step_mode()) {                           /* the steps (the step playing: the other way round), the tracks */
+        m = 0;
+        for (i = 0; i < 27u; i++) {
+            int wi = KEY_WHITE[i], bi = KEY_BLACK[i], on = 0, play = 0;
+            if (page == PG_SEQ) {
+                if (wi >= 0) { on = sel_step_on(sel_track, wi); play = sq.vis == wi; }
+                else if (bi < 4) on = DISP[bi] == sel_track;
+                else on = !sel_track && bi - 4 == sel_drum;
+            } else {
+                if (wi >= 0 && wi < 4) on = !tr[DISP[wi]].mute;
+                else if (bi >= 0 && bi < 4) on = DISP[bi] == sel_track;
+                if (wi >= 0) play = sq.vis == wi;
+            }
+            if (on ^ play) m |= 1u << i;
+        }
+        return m;
+    }
     for (i = 0; i < NV; i++)
         if (vc[i].active && !vc[i].rel && (uint32_t)vc[i].note >= base && (uint32_t)vc[i].note < base + 27u)
             m |= 1u << ((uint32_t)vc[i].note - base);
@@ -958,9 +1202,10 @@ uint32_t od_leds_keys(void)              /* bit k: key k lit */
 }
 uint32_t od_leds_buttons(void)           /* bit b: button b (OB_*) lit */
 {
-    static const uint8_t PB[PG_N] = {OB_HOME, OB_EDIT, OB_ENV, OB_LFO, OB_ARP, OB_FX, OB_GLO};
+    static const uint8_t PB[PG_N] = {OB_HOME, OB_EDIT, OB_ENV, OB_LFO, OB_ARP, OB_FX, OB_SEQ, OB_SEQ, OB_GLO};
     uint32_t m = 1u << PB[page];
     if (hold) m |= 1u << OB_SCL;
-    if (ai_on) m |= 1u << OB_REC;
+    if (sq.playing) m |= 1u << OB_PLAY;
+    if (rec_on) m |= 1u << OB_REC;
     return m;
 }

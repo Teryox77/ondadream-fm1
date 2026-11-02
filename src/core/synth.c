@@ -18,6 +18,7 @@ typedef struct {
 } patch_t;
 static patch_t P;
 static patch_t PS;                      /* what the voices and the effects play: P through the preview's smoothers */
+static patch_t *const PS_KB = &PS;      /* (v_render: only the keyboard's voices feel the screen's filter touch) */
 static float tmod;                      /* the screen's filter touch (not on the FM-1: 0) */
 static int preset_idx;
 
@@ -160,7 +161,6 @@ static void v_on(voice_t *v, int n, float vel)
 #endif
     v->active = 1;
     v->rel = 0;
-    note_flash_ms = od_ms();
 }
 static void v_off(voice_t *v)
 {
@@ -176,6 +176,7 @@ static void direct_on(int n, float vel)
     OD_TEST_LOG(n, vel);
 #endif
     int rel = 0;
+    note_flash_ms = od_ms();
     for (i = 0; i < NV; i++)
         if (vc[i].active && vc[i].note == n) { v_on(&vc[i], n, vel); return; }
     for (i = 0; i < NV; i++)
@@ -227,8 +228,9 @@ static inline int32_t osc(uint32_t ph, uint32_t inc, uint32_t wave)
 }
 
 /* one voice, one block: the coefficients in float, the samples in integers, added to out (Q15) */
-static void v_render(voice_t *v, int32_t *out, uint32_t n)
+static void v_render(voice_t *v, const patch_t *ps, float gain, int32_t *out, uint32_t n)
 {
+#define PS (*ps)                                 /* the keyboard's voices play PS, the sequencer's tracks their preset */
     uint32_t wave = (uint32_t)CLAMP((int32_t)(PS.wave + .5f), 0, 3), i;
     float amp, fe, l, vib, f1, f2, kmul, fc, g, k, a1f, vel, vamp;
     uint32_t inc1, inc2;
@@ -259,7 +261,7 @@ static void v_render(voice_t *v, int32_t *out, uint32_t n)
         v->c_kt = PS.keyTrk;
     }
     kmul = v->c_kmul;
-    fc = PS.cutoff * kmul * od_exp2(fe * PS.fEnvAmt * 5.f + l * PS.lfoCut * 2.f + tmod * 3.f);
+    fc = PS.cutoff * kmul * od_exp2(fe * PS.fEnvAmt * 5.f + l * PS.lfoCut * 2.f + (ps == PS_KB ? tmod * 3.f : 0.f));
     fc = CLAMP(fc, 20.f, .42f * OD_FS);
     g = od_tan(3.14159265f * fc / (float)OD_FS);
     {
@@ -274,7 +276,7 @@ static void v_render(voice_t *v, int32_t *out, uint32_t n)
     m2 = (int32_t)(CLAMP(PS.oscMix, 0.f, 1.f) * 32767.f);
     m1 = 32767 - m2;
     vel = (float)v->vel_q15 * (1.f / 32767.f);
-    vamp = amp * (.25f + .75f * vel * vel);
+    vamp = amp * (.25f + .75f * vel * vel) * gain;
     g1 = (int32_t)(CLAMP(vamp, 0.f, 1.f) * 32767.f);
     g0 = v->g0;
     gstep = (g1 - g0) / (int32_t)n;              /* the amplitude, a ramp over the block */
@@ -307,6 +309,7 @@ static void v_render(voice_t *v, int32_t *out, uint32_t n)
     v->ic2 = ic2;
     v->ph1 = ph1;
     v->ph2 = ph2;
+#undef PS
 }
 
 /* ---------------------------------------------------------------- the arpeggiator --- */
@@ -482,13 +485,40 @@ static void smooth(uint32_t n)
 static float vol_s = .8f;               /* the volume, smoothed */
 static float master_v = 1.f;            /* the MASTER pot */
 
+/* the sequencer (seq.c): its tracks' voices and drums, its steps and gates on their exact sample */
+#define NTR 4u                          /* track 0: the drums (shown last, "D"); 1..3: synth tracks */
+static void seq_control(void);
+static void seq_render(int32_t (*trk)[OD_BLK], uint32_t at, uint32_t seg);
+static uint32_t seq_seg(uint32_t now, uint32_t seg);
+static void seq_events(uint32_t now);
+static void seq_gains(int32_t *pl, int32_t *pr, int32_t *fx);
+static inline uint32_t seg_lim(uint32_t seg, uint32_t ev, uint32_t now)   /* the samples to an event (0 if due) */
+{
+    int32_t d = (int32_t)(ev - now);
+    if (d < 0) d = 0;
+    return (uint32_t)d < seg ? (uint32_t)d : seg;
+}
+/* the master's soft clip on a Q14 sum: tanh(x * pre) * post, Q15 */
+static inline int32_t soft_clip(int32_t m, int32_t pre_q10, int32_t post_q14)
+{
+    int32_t x = (CLAMP(m, -1000000, 1000000) * pre_q10) >> 9;   /* the voices' Q14 sum x pre: Q15 */
+    uint32_t ti;
+    x = CLAMP(x, -131071, 131071);
+    ti = (uint32_t)((x >> 9) + 256);                             /* tanh over -4..4: 64 steps a unit, interpolated */
+    x = OD_TANH[ti] + (((OD_TANH[ti + 1u] - OD_TANH[ti]) * (x & 511)) >> 9);
+    return (x * post_q14) >> 14;
+}
+
 void od_audio(int32_t *lr, uint32_t n)
 {
-    static int32_t mix[OD_BLK];
-    uint32_t b, i, j;
+    static int32_t kb[OD_BLK], trk[NTR][OD_BLK];
+    uint32_t b, i, j, q;
     float drive, pre, post, th;
     int32_t pre_q10, post_q14, cho, eco, rev, volq, peak = 0;
+    int32_t pl[NTR], pr[NTR], pf[NTR];
     smooth(n);
+    seq_control();
+    seq_gains(pl, pr, pf);
     drive = PS.drive < 1.f ? 1.f : PS.drive;
     pre = .28f * drive;
     th = drive > 3.f ? .995f : (float)OD_TANH[(uint32_t)CLAMP((drive + 4.f) * 64.f, 0.f, 512.f)] * (1.f / 32767.f);
@@ -505,20 +535,25 @@ void od_audio(int32_t *lr, uint32_t n)
         volq = (int32_t)(CLAMP(vol_s, 0.f, 1.f) * 32767.f);
         dl_tgt += (et - dl_tgt) * .00302f;                  /* the time, smoothed (120 ms), then the glide (150 ms) */
         dl_cur += (dl_tgt - dl_cur) * .00242f;
-        for (i = 0; i < m; i++) mix[i] = 0;
-        /* the voices; the arpeggiator's steps and gates fall on their exact sample, as in the preview: the block is cut
-         * there (sclock: the voices' clock here, the effects' below) */
+        for (i = 0; i < m; i++) {
+            kb[i] = 0;
+            for (q = 0; q < NTR; q++) trk[q][i] = 0;
+        }
+        /* the voices; the arpeggiator's and the sequencer's steps and gates fall on their exact sample, as in the
+         * preview: the block is cut there (sclock: the voices' clock here, the effects' below) */
         {
             uint32_t at = 0, t0 = sclock;
             while (at < m) {
-                uint32_t seg = m - at;
+                uint32_t seg = m - at, now = t0 + at;
                 if (arp_on()) {
-                    if (arp.gate_off != 0xFFFFFFFFu && arp.gate_off - (t0 + at) < seg) seg = arp.gate_off - (t0 + at);
-                    if (arp.next != 0xFFFFFFFFu && arp.next - (t0 + at) < seg) seg = arp.next - (t0 + at);
+                    if (arp.gate_off != 0xFFFFFFFFu) seg = seg_lim(seg, arp.gate_off, now);
+                    if (arp.next != 0xFFFFFFFFu) seg = seg_lim(seg, arp.next, now);
                 }
+                seg = seq_seg(now, seg);
                 if (seg) {
                     for (j = 0; j < NV; j++)
-                        if (vc[j].active) v_render(&vc[j], mix + at, seg);
+                        if (vc[j].active) v_render(&vc[j], &PS, 1.f, kb + at, seg);
+                    seq_render(trk, at, seg);
                     at += seg;
                 }
                 sclock = t0 + at;
@@ -533,25 +568,33 @@ void od_audio(int32_t *lr, uint32_t n)
                         arp.next = sclock + step_samples();
                     }
                 }
+                seq_events(sclock);
             }
             sclock = t0;
         }
         for (i = 0; i < m; i++) {
-            int32_t x, l, r, d1, d2, rl, rr;
-            uint32_t ti, dq;
-            /* the master's soft clip: tanh(x * pre) * post */
-            x = (CLAMP(mix[i], -1000000, 1000000) * pre_q10) >> 9;   /* the voices' Q14 sum x pre: Q15 */
-            x = CLAMP(x, -131071, 131071);
-            ti = (uint32_t)((x >> 9) + 256);                     /* tanh over -4..4: 64 steps a unit, interpolated */
-            x = OD_TANH[ti] + (((OD_TANH[ti + 1u] - OD_TANH[ti]) * (x & 511)) >> 9);
-            x = (x * post_q14) >> 14;
-            /* chorus: two taps 12 +- 6 ms in quadrature */
-            ch_buf[ch_w] = sat16(x);
+            int32_t ml = kb[i], mr = kb[i], mf = kb[i], xl, xr, xm, x, l, r, d1, d2, rl, rr;
+            uint32_t dq;
+            /* the tracks: their pan (the keyboard is in the middle at full level on both sides) and their reverb send */
+            for (q = 0; q < NTR; q++) {
+                int32_t t = trk[q][i];
+                if (!t) continue;
+                t = CLAMP(t, -131071, 131071);
+                ml += (t * pl[q]) >> 14;
+                mr += (t * pr[q]) >> 14;
+                mf += (t * pf[q]) >> 14;
+            }
+            /* the master's soft clip, a side each (it keeps the tracks' pan) */
+            xl = soft_clip(ml, pre_q10, post_q14);
+            xr = mr == ml ? xl : soft_clip(mr, pre_q10, post_q14);
+            xm = (xl + xr) >> 1;
+            /* chorus: two taps 12 +- 6 ms in quadrature on the middle; the dry part stays stereo */
+            ch_buf[ch_w] = sat16(xm);
             ch_ph += (uint32_t)(.6f * 4294967296.f / (float)OD_FS);
             d1 = (12 * 441 / 10) * 256 + ((6 * 441 / 10) * OD_SINE[ch_ph >> 22] >> 7);
             d2 = (12 * 441 / 10) * 256 + ((6 * 441 / 10) * OD_SINE[(ch_ph + 0x40000000u) >> 22] >> 7);
-            l = ((x * (32767 - (cho * 13107 >> 15))) >> 15) + ((frd(ch_buf, ch_w, CH_N, (uint32_t)d1) * cho) >> 15);
-            r = ((x * (32767 - (cho * 13107 >> 15))) >> 15) + ((frd(ch_buf, ch_w, CH_N, (uint32_t)d2) * cho) >> 15);
+            l = ((xl * (32767 - (cho * 13107 >> 15))) >> 15) + ((frd(ch_buf, ch_w, CH_N, (uint32_t)d1) * cho) >> 15);
+            r = ((xr * (32767 - (cho * 13107 >> 15))) >> 15) + ((frd(ch_buf, ch_w, CH_N, (uint32_t)d2) * cho) >> 15);
             ch_w = (ch_w + 1u) % CH_N;
             /* echo: stereo, filtered feedback with a little cross (as the preview: every sample) */
             dq = (uint32_t)(dl_cur * 256.f);
@@ -565,9 +608,11 @@ void od_audio(int32_t *lr, uint32_t n)
             if (++dl_w >= DL_N) dl_w = 0;
             l += (rl * eco) >> 15;
             r += (rr * eco) >> 15;
-            /* reverb: four combs and two all-passes a side */
+            /* reverb: four combs and two all-passes a side, fed only by the sends (a track at 0 never reaches it) */
             if (rev > 32) {
-                int32_t in = (x * 11469) >> 15, wl = 0, wr = 0, k;
+                int32_t in, wl = 0, wr = 0, k;
+                x = mf == ml ? xl : mf == mr ? xr : soft_clip(mf, pre_q10, post_q14);
+                in = (x * 11469) >> 15;
                 for (k = 0; k < 4; k++) { wl += comb(&cl[k], in); wr += comb(&cr[k], in); }
                 wl >>= 2;
                 wr >>= 2;
@@ -590,6 +635,12 @@ void od_audio(int32_t *lr, uint32_t n)
 }
 
 /* ---------------------------------------------------------------- the patch --- */
+static void patch_voice(patch_t *d, const od_preset_t *p)   /* what a voice plays, from a preset */
+{
+    d->wave = p->wave; d->detune = p->detune; d->oscMix = p->oscMix; d->drive = p->drive; d->cutoff = p->cutoff;
+    d->reso = p->reso; d->fEnvAmt = p->fEnvAmt; d->keyTrk = p->keyTrk; d->a = p->a; d->d = p->d; d->s = p->s; d->r = p->r;
+    d->lfoRate = p->lfoRate; d->lfoPitch = p->lfoPitch; d->lfoCut = p->lfoCut; d->fDecay = p->fDecay;
+}
 static void preset_load(int i)
 {
     const od_preset_t *p;
@@ -639,7 +690,7 @@ void od_selftest(void)
         t.lfo = 0.f;
         for (k = 0; k < 16u; k++) {
             for (i = 0; i < 256u; i++) out[i] = 0;
-            for (i = 0; i < 256u; i += OD_BLK) v_render(&t, out + i, OD_BLK);
+            for (i = 0; i < 256u; i += OD_BLK) v_render(&t, &PS, 1.f, out + i, OD_BLK);
             for (i = 0; i < 256u; i++) acc += (uint32_t)(out[i] < 0 ? -out[i] : out[i]);
         }
         st_num(&e, (int32_t)(acc / 4096u));
@@ -655,7 +706,7 @@ void od_selftest(void)
         t.lfo = 0.f;
         for (k = 0; k < 16u; k++) {
             for (i = 0; i < 256u; i++) out[i] = 0;
-            for (i = 0; i < 256u; i += OD_BLK) v_render(&t, out + i, OD_BLK);
+            for (i = 0; i < 256u; i += OD_BLK) v_render(&t, &PS, 1.f, out + i, OD_BLK);
             for (i = 0; i < 256u; i++) acc += (uint32_t)(out[i] < 0 ? -out[i] : out[i]);
         }
         st_num(&e, (int32_t)(acc / 4096u));

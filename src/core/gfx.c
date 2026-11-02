@@ -255,3 +255,80 @@ static int32_t text(const od_font_t *f, float fx, float fy, const char *s, uint1
     }
     return (x16 - x0 + 8) >> 4;
 }
+
+/* ---------------------------------------------------------------- shapes of the SEQUENCER page --- */
+/* (screen space, as the canvas fills them: coverage-weighted edges) */
+static float g_atan2(float y, float x)
+{
+    float ax = x < 0.f ? -x : x, ay = y < 0.f ? -y : y, a, s, r;
+    if (ax == 0.f && ay == 0.f) return 0.f;
+    a = (ax < ay ? ax : ay) / (ax > ay ? ax : ay);
+    s = a * a;
+    r = ((-.0464964749f * s + .15931422f) * s - .327622764f) * s * a + a;
+    if (ay > ax) r = 1.57079637f - r;
+    if (x < 0.f) r = 3.14159274f - r;
+    return y < 0.f ? -r : r;
+}
+static float cov01(float v) { return v < 0.f ? 0.f : v > 1.f ? 1.f : v; }
+static void fill_circle(float cx, float cy, float r, uint16_t c, float a)
+{
+    int32_t i, j;
+    for (j = (int32_t)(cy - r - 1.f); j <= (int32_t)(cy + r + 1.f); j++)
+        for (i = (int32_t)(cx - r - 1.f); i <= (int32_t)(cx + r + 1.f); i++) {
+            float dx = (float)i + .5f - cx, dy = (float)j + .5f - cy, cov = cov01(r + .5f - g_sqrt(dx * dx + dy * dy));
+            if (cov > 0.f) blend(i, j, c, (uint32_t)(cov * a * 256.f));
+        }
+}
+static void fill_tri(float x0, float y0, float x1, float y1, float x2, float y2, uint16_t c, float a)
+{
+    float xa = x0 < x1 ? (x0 < x2 ? x0 : x2) : (x1 < x2 ? x1 : x2), xb = x0 > x1 ? (x0 > x2 ? x0 : x2) : (x1 > x2 ? x1 : x2);
+    float ya = y0 < y1 ? (y0 < y2 ? y0 : y2) : (y1 < y2 ? y1 : y2), yb = y0 > y1 ? (y0 > y2 ? y0 : y2) : (y1 > y2 ? y1 : y2);
+    float ar = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
+    int32_t i, j, u, v;
+    for (j = (int32_t)ya; j <= (int32_t)yb; j++)
+        for (i = (int32_t)xa; i <= (int32_t)xb; i++) {
+            int n = 0;
+            for (v = 0; v < 4; v++)
+                for (u = 0; u < 4; u++) {
+                    float px = (float)i + ((float)u + .5f) * .25f, py = (float)j + ((float)v + .5f) * .25f;
+                    float e0 = (x1 - x0) * (py - y0) - (y1 - y0) * (px - x0), e1 = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1);
+                    float e2 = (x0 - x2) * (py - y2) - (y0 - y2) * (px - x2);
+                    if (ar < 0.f) { e0 = -e0; e1 = -e1; e2 = -e2; }
+                    n += e0 >= 0.f && e1 >= 0.f && e2 >= 0.f;
+                }
+            if (n) blend(i, j, c, (uint32_t)((float)n * (1.f / 16.f) * a * 256.f));
+        }
+}
+/* a ring's arc, width w, flat ends (lineCap "butt"), angles a0 < a1 (radians, clockwise on the screen) */
+static void arc_butt(float cx, float cy, float r, float w, float a0, float a1, uint16_t c)
+{
+    float hw = w * .5f;
+    int32_t i, j;
+    if (a1 - a0 <= 0.f) return;
+    for (j = (int32_t)(cy - r - hw - 1.f); j <= (int32_t)(cy + r + hw + 1.f); j++)
+        for (i = (int32_t)(cx - r - hw - 1.f); i <= (int32_t)(cx + r + hw + 1.f); i++) {
+            float dx = (float)i + .5f - cx, dy = (float)j + .5f - cy, d = g_sqrt(dx * dx + dy * dy), dr = d - r, cr, ca, th;
+            cr = cov01(hw + .5f - (dr < 0.f ? -dr : dr));
+            if (cr <= 0.f) continue;
+            th = g_atan2(dy, dx);
+            while (th < a0) th += 6.2831853f;
+            while (th >= a0 + 6.2831853f) th -= 6.2831853f;
+            if (th <= a1) ca = cov01(.5f + (th - a0 < a1 - th ? th - a0 : a1 - th) * d);
+            else { float g0 = th - a1, g1 = a0 + 6.2831853f - th; ca = cov01(.5f - (g0 < g1 ? g0 : g1) * d); }
+            if (cr * ca > 0.f) blend(i, j, c, (uint32_t)(cr * ca * 256.f));
+        }
+}
+static void line_butt(float x0, float y0, float x1, float y1, float w, uint16_t c)
+{
+    float dx = x1 - x0, dy = y1 - y0, len = g_sqrt(dx * dx + dy * dy), hw = w * .5f;
+    int32_t i, j;
+    if (len <= 0.f) return;
+    dx /= len;
+    dy /= len;
+    for (j = (int32_t)((y0 < y1 ? y0 : y1) - hw - 1.f); j <= (int32_t)((y0 > y1 ? y0 : y1) + hw + 1.f); j++)
+        for (i = (int32_t)((x0 < x1 ? x0 : x1) - hw - 1.f); i <= (int32_t)((x0 > x1 ? x0 : x1) + hw + 1.f); i++) {
+            float px = (float)i + .5f - x0, py = (float)j + .5f - y0, t = px * dx + py * dy, q = px * dy - py * dx;
+            float cov = cov01(hw + .5f - (q < 0.f ? -q : q)) * cov01((t < len - t ? t : len - t) + .5f);
+            if (cov > 0.f) blend(i, j, c, (uint32_t)(cov * 256.f));
+        }
+}

@@ -19,6 +19,11 @@ const FACES = [
   ['PX7M', "500 7.5px PX", ASCII],              // label() on ENVELOPE, whose scene is drawn at .75
   ['PX11', "11px PX", ASCII],                   // the cards' values
   ['PX10', "10px PX", ASCII],                   // GLOBAL's values
+  ['PX9', "9px PX", ASCII],                     // SEQUENCER: the tracks' notes, "rec"
+  ['PX13', "13px PX", '0123456789.'],          // SEQUENCER: the bar.beat
+  ['PX14', "14px PX", '0123456789D'],          // SEQUENCER: the tracks' numbers
+  ['PX30', "30px PX", '0123456789'],           // SEQUENCER: the tempo
+  ['SILK6', "6px SILK", ASCII],                 // MIXER: the tracks' sounds
   ['INT36', "800 36px IT", 'OndaDrem'],         // the splash
   ['INT10B', "800 10px IT", ASCII],
   ['INT11', "600 11px IT", ASCII],

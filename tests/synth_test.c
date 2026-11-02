@@ -8,6 +8,8 @@ static unsigned now_ms;
 #include "../src/core/od.h"
 uint32_t od_ms(void) { return now_ms; }
 #include "../src/core/synth.c"
+#include "../src/core/seq.c"
+static void key_off(int n) { (void)n; }
 static int32_t buf[2 * 512];
 static FILE *wav;
 static long frames;
@@ -36,6 +38,7 @@ int main(void)
     wav = fopen("/tmp/od_test.wav", "wb");
     fwrite(hdr, 44, 1, wav);
     synth_init();
+    seq_init();
     for (p = 0; p < OD_NPRESETS; p++) {
         double peak = 0, rms = 0;
         preset_load(p);

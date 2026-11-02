@@ -85,6 +85,9 @@ jobs:
           python3 tools/build_fm1.py --version "$VER"
           mkdir -p dist
           cp "build/fm1/ondadream-$VER.fwsc" dist/
+          # the registers the code uses (the audio interrupt saves r0-r3 and calls C: an FPU with its own registers would need more)
+          echo "::warning title=registers::$(grep -oE '\b(r[0-9]+|f[a-z]*[0-9]+|[a-z]*fp[a-z0-9]*)\b' build/fm1/app/ondadream.dis | sort | uniq -c | sort -rn | head -60 | tr -s ' ' | tr '\n' ';')"
+          echo "::warning title=isr::$(awk '/<fm1_alnk0_irq>:/,/rts/' build/fm1/app/ondadream.dis | head -80 | cut -c1-90 | tr '\n' ';' | head -c 3500)"
           (cd dist && sha256sum *.fwsc > SHA256SUMS)
 
       - name: Browser emulator
