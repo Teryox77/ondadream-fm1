@@ -5,6 +5,7 @@
 #include "od.h"
 static uint32_t ms;
 uint32_t od_ms(void) { return ms; }
+void od_midi_out(uint8_t st, uint8_t d1, uint8_t d2) { (void)st; (void)d1; (void)d2; }
 #include "od.c"
 static uint16_t fbx[240 * 240];
 static void dump(const char *nm)

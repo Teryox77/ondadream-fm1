@@ -324,7 +324,14 @@ static uint8_t ai_on;
 static uint32_t ai_rng = 1;
 static uint32_t arp_tile, arp_jump_ms;
 static int arp_on(void) { return P.arpPattern > .5f; }
-static uint32_t step_samples(void) { float b = P.arpBpm < 20.f ? 20.f : P.arpBpm; return (uint32_t)((float)OD_FS * 60.f / b / 4.f + .5f); }   /* (rounded, as the preview) */
+static int ext_active(void);
+static float ext_step(void);
+static uint32_t step_samples(void)       /* (rounded, as the preview); following a MIDI clock: its sixteenth */
+{
+    float b = P.arpBpm < 20.f ? 20.f : P.arpBpm;
+    if (ext_active()) return (uint32_t)(ext_step() + .5f);
+    return (uint32_t)((float)OD_FS * 60.f / b / 4.f + .5f);
+}
 
 static int arp_seq(int8_t *out)
 {
@@ -492,6 +499,7 @@ static void seq_render(int32_t (*trk)[OD_BLK], uint32_t at, uint32_t seg);
 static uint32_t seq_seg(uint32_t now, uint32_t seg);
 static void seq_events(uint32_t now);
 static void seq_gains(int32_t *pl, int32_t *pr, int32_t *fx);
+static void clk_tick(uint32_t m);
 static inline uint32_t seg_lim(uint32_t seg, uint32_t ev, uint32_t now)   /* the samples to an event (0 if due) */
 {
     int32_t d = (int32_t)(ev - now);
@@ -535,6 +543,7 @@ void od_audio(int32_t *lr, uint32_t n)
         volq = (int32_t)(CLAMP(vol_s, 0.f, 1.f) * 32767.f);
         dl_tgt += (et - dl_tgt) * .00302f;                  /* the time, smoothed (120 ms), then the glide (150 ms) */
         dl_cur += (dl_tgt - dl_cur) * .00242f;
+        clk_tick(m);
         for (i = 0; i < m; i++) {
             kb[i] = 0;
             for (q = 0; q < NTR; q++) trk[q][i] = 0;
@@ -692,50 +701,6 @@ static int preset_save(void)             /* SAVE: the sound as it is now, as the
     n_user++;
     store_dirty = 1;
     return preset_idx;
-}
-/* the store's image: "ODU1", the count, then each preset's 25 numbers (the order of od_preset_t), little-endian */
-static void put32(uint8_t *b, uint32_t v) { b[0] = (uint8_t)v; b[1] = (uint8_t)(v >> 8); b[2] = (uint8_t)(v >> 16); b[3] = (uint8_t)(v >> 24); }
-static uint32_t get32(const uint8_t *b) { return (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24; }
-int od_store_dirty(void) { int d = store_dirty; store_dirty = 0; return d; }
-uint32_t od_store_image(uint8_t *b, uint32_t max)
-{
-    int k, j;
-    if (max < 8u + (uint32_t)n_user * 100u) return 0;
-    put32(b, 0x3155444Fu);
-    put32(b + 4, (uint32_t)n_user);
-    for (k = 0; k < n_user; k++)
-        for (j = 0; j < 25; j++) {
-            union { float f; uint32_t u; } c;
-            c.f = (&user_p[k].wave)[j];
-            put32(b + 8 + k * 100 + j * 4, c.u);
-        }
-    return 8u + (uint32_t)n_user * 100u;
-}
-int od_store_load(const uint8_t *b, uint32_t n)   /* 0: taken; -1: not a store (the presets stay as they are) */
-{
-    /* each number in a sane range (the knobs' and the presets' with room): a damaged store must not reach the voices */
-    static const float LO[25] = {0, -48, 0, 0, 20, 0, 0, 0, .0005f, .001f, 0, .001f, .01f, 0, 0, .005f, 0, 0, 20, 1, 0, 0, 0, .02f, 0};
-    static const float HI[25] = {3, 48, 1, 16, 20000, 1, 1, 1, 10, 10, 1, 10, 40, 100, 1, 10, 1, 4, 300, 3, 1, 1, 1, 1.5f, 1};
-    uint32_t cnt, k, j;
-    if (n < 8u || get32(b) != 0x3155444Fu) return -1;
-    cnt = get32(b + 4);
-    if (cnt > OD_MAXUSER || n < 8u + cnt * 100u) return -1;
-    for (k = 0; k < cnt; k++)
-        for (j = 0; j < 25u; j++) {
-            union { float f; uint32_t u; } c;
-            c.u = get32(b + 8 + k * 100u + j * 4u);
-            if (!(c.f >= LO[j] - .0001f && c.f <= HI[j] + .0001f)) return -1;   /* (NaN fails too) */
-        }
-    for (k = 0; k < cnt; k++) {
-        for (j = 0; j < 25u; j++) {
-            union { float f; uint32_t u; } c;
-            c.u = get32(b + 8 + k * 100u + j * 4u);
-            (&user_p[k].wave)[j] = c.f;
-        }
-        user_name_set((int)k);
-    }
-    n_user = (int)cnt;
-    return 0;
 }
 /* a self-test of the arithmetic the voices use, run once at start: GLOBAL shows it (the FM-1 against the computer) */
 static char od_test_txt[64];

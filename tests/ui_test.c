@@ -5,8 +5,12 @@
 static unsigned now_ms;
 #include "../src/core/od.h"
 uint32_t od_ms(void) { return now_ms; }
+static uint8_t mo_log[4096][3];
+static unsigned mo_n;
+void od_midi_out(uint8_t st, uint8_t d1, uint8_t d2) { if (mo_n < 4096u) { mo_log[mo_n][0] = st; mo_log[mo_n][1] = d1; mo_log[mo_n][2] = d2; } mo_n++; }
 #include "../src/core/od.c"
 static uint16_t frame[240 * 240];
+static int held_note(int n) { uint32_t i; for (i = 0; i < NV; i++) if (vc[i].active && !vc[i].rel && vc[i].note == n) return 1; return 0; }
 static int32_t abuf[2 * 256];
 static void tick(int ms) { int i; for (i = 0; i < ms / 5; i++) { od_audio(abuf, 220); now_ms += 5; } }
 static void save(const char *name)
@@ -100,7 +104,7 @@ int main(void)
         od_frame(frame); save("save_full");
         if (strcmp(preset_at(OD_NPRESETS + 29)->name, "MIO 30") || strcmp(preset_at(OD_NPRESETS)->name, "MIO 1")) { printf("SAVE: names\n"); bad++; }
         n = od_store_image(img, sizeof img);
-        if (n != 8u + 30u * 100u) { printf("store: %u bytes\n", n); bad++; }
+        if (n != 12u + 30u * 100u) { printf("store: %u bytes\n", n); bad++; }
         memcpy(keep, user_p, sizeof keep);
         memcpy(bad_img, img, n);
         bad_img[8 + 5 * 100 + 16] = 0xFF; bad_img[8 + 5 * 100 + 17] = 0xFF; bad_img[8 + 5 * 100 + 18] = 0xFF; bad_img[8 + 5 * 100 + 19] = 0x7F;   /* a NaN */
@@ -133,6 +137,56 @@ int main(void)
         od_button(OB_GLO, 1); od_frame(frame); save("glo_batt");
         if (bad) { printf("battery: %d failures\n", bad); return 1; }
         printf("battery ok\n");
+    }
+    {   /* MIDI: the page, the channel in, the keys out, the clock in (sync EXT) and out, the settings kept */
+        int bad = 0;
+        unsigned k, f8 = 0, fa = 0, fc = 0;
+        uint8_t img[OD_STORE_MAX_BYTES];
+        uint32_t n;
+        synth_panic(); seq_stop(); tick(200);
+        od_button(OB_GLO, 1); if (page != PG_GLO) { printf("GLO: no MIDI page\n"); bad++; }
+        od_enc(OE_K1, 3);                                     /* IN: channel 3 */
+        if (mset.in_ch != 3) { printf("IN CH: %d\n", mset.in_ch); bad++; }
+        od_midi(0x90, 60, 100); tick(20);                     /* channel 1: not heard */
+        if (held_note(60)) { printf("IN CH 3: channel 1 played\n"); bad++; }
+        od_midi(0x92, 60, 100); tick(20);                     /* channel 3: heard */
+        if (!held_note(60)) { printf("IN CH 3: channel 3 not played\n"); bad++; }
+        od_midi(0x82, 60, 0); od_enc(OE_K1, -10); if (mset.in_ch != 0) { printf("IN CH: not back to ALL\n"); bad++; }
+        od_frame(frame); save("midi_page");
+        od_enc(OE_K2, 1); mo_n = 0;                           /* OUT: channel 2 (the notes still on: off); a key */
+        od_key(5, 1); od_key(5, 0);
+        if (mo_n != 2 || mo_log[0][0] != 0x91 || mo_log[0][1] != KB_BASE + 5 || mo_log[1][0] != 0x81) { printf("OUT: %u messages, %02x %d\n", mo_n, mo_log[0][0], mo_log[0][1]); bad++; }
+        od_key(5, 1); mo_n = 0; od_enc(OE_K2, -5);            /* OUT OFF with a key down: its note off goes out */
+        if (mo_n != 1 || mo_log[0][0] != 0x81) { printf("OUT OFF: the held note not released (%u)\n", mo_n); bad++; }
+        od_key(5, 0);
+        od_enc(OE_K3, 1); if (!mset.sync) { printf("SYNC: not EXT\n"); bad++; }
+        od_midi(0xFA, 0, 0);                                  /* START, then 96 clocks 661 samples apart (166.8 BPM): 4 beats, 16 steps (the 17th on the 97th clock's time) */
+        {
+            int steps = 0, last = -1, i2;
+            for (i2 = 0; i2 < 96; i2++) {
+                od_midi(0xF8, 0, 0);
+                od_audio(abuf, 220); od_audio(abuf, 221); od_audio(abuf, 220); now_ms += 15;
+                if (sq.vis != last) { steps++; last = sq.vis; }
+            }
+            if (!sq.playing || steps != 17) { printf("SYNC: %d steps in 96 clocks\n", steps); bad++; }
+            if (seq_bpm_shown() < 166 || seq_bpm_shown() > 168) { printf("SYNC: %d BPM shown\n", seq_bpm_shown()); bad++; }
+            od_frame(frame); save("midi_sync");
+            od_midi(0xFC, 0, 0); if (sq.playing) { printf("SYNC: STOP ignored\n"); bad++; }
+        }
+        od_enc(OE_K3, -1);
+        mo_n = 0; od_enc(OE_K4, 1);                           /* CLOCK OUT at 120: 48 a second, START and STOP */
+        sq.bpm = 120; od_button(OB_PLAY, 1); tick(1000); od_button(OB_PLAY, 1);
+        for (k = 0; k < mo_n && k < 4096u; k++) { f8 += mo_log[k][0] == 0xF8; fa += mo_log[k][0] == 0xFA; fc += mo_log[k][0] == 0xFC; }
+        if (f8 < 47 || f8 > 50 || fa != 1 || fc != 1) { printf("CLOCK OUT: %u clocks, %u START, %u STOP\n", f8, fa, fc); bad++; }
+        od_enc(OE_K1, 7);
+        if (!od_store_dirty() && (now_ms += 2100, !od_store_dirty())) { printf("settings: not saved\n"); bad++; }
+        n = od_store_image(img, sizeof img);
+        mset.in_ch = 0; mset.out_ch = 0; mset.sync = 1; mset.clk_out = 0;
+        if (od_store_load(img, n) || mset.in_ch != 7 || mset.out_ch != 0 || mset.sync != 0 || mset.clk_out != 1) { printf("settings: not back\n"); bad++; }
+        od_button(OB_ARP, 1); od_button(OB_ARP, 1); if (!ai_on) { printf("ARP twice: no ARP AI\n"); bad++; }
+        od_button(OB_ARP, 1); if (ai_on) { printf("ARP again: ARP AI still on\n"); bad++; }
+        if (bad) { printf("midi: %d failures\n", bad); return 1; }
+        printf("midi ok\n");
     }
     printf("ok, %u ms\n", now_ms);
     return 0;

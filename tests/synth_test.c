@@ -7,6 +7,7 @@
 static unsigned now_ms;
 #include "../src/core/od.h"
 uint32_t od_ms(void) { return now_ms; }
+void od_midi_out(uint8_t st, uint8_t d1, uint8_t d2) { (void)st; (void)d1; (void)d2; }
 #include "../src/core/synth.c"
 #include "../src/core/seq.c"
 static void key_off(int n) { (void)n; }

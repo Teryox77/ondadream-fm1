@@ -21,7 +21,7 @@ static void pal_init(void)
 /* ---------------------------------------------------------------- state --- */
 enum { PG_SYNTH, PG_FILTER, PG_ENV, PG_MOD, PG_ARP, PG_FX, PG_SEQ, PG_MIX, PG_GLO, PG_N };
 static const char *const PG_TITLE[PG_N] = {"HOME", "FILTER", "ENVELOPE", "LFO", "ARPEGGIO", "EFFECTS", "SEQUENCER", "MIXER",
-    "GLOBAL"};
+    "MIDI"};
 static int page = PG_SYNTH;
 static uint8_t hold;
 static int oct_shift;
@@ -85,15 +85,15 @@ static float clampf(float x, float l, float h) { return x < l ? l : x > h ? h : 
 /* ---------------------------------------------------------------- the knobs of each page --- */
 enum { K_WAVE, K_DETUNE, K_MIX, K_DRIVE, K_CUT, K_RESO, K_FENV, K_KTRK, K_A, K_D, K_S, K_R, K_LFO, K_VIB, K_LFOCUT,
        K_FDEC, K_APAT, K_ABPM, K_AOCT, K_AGATE, K_CHO, K_ECO, K_ETIME, K_REV, K_VOL, K_OCT, K_TEMPO, K_AI,
-       K_SQBPM, K_SQLVL, K_SQSND, K_SQNOTE, K_MXVOL, K_MXPAN, K_MXFX, K_MXMUTE };
+       K_SQBPM, K_SQLVL, K_SQSND, K_SQNOTE, K_MXVOL, K_MXPAN, K_MXFX, K_MXMUTE, K_MIN, K_MOUT, K_MSYNC, K_MCLK };
 static const uint8_t PG_K[PG_N][4] = {
     {K_WAVE, K_DETUNE, K_MIX, K_DRIVE}, {K_CUT, K_RESO, K_FENV, K_KTRK}, {K_A, K_D, K_S, K_R},
     {K_LFO, K_VIB, K_LFOCUT, K_FDEC}, {K_APAT, K_ABPM, K_AOCT, K_AGATE}, {K_CHO, K_ECO, K_ETIME, K_REV},
-    {K_SQBPM, K_SQLVL, K_SQSND, K_SQNOTE}, {K_MXVOL, K_MXPAN, K_MXFX, K_MXMUTE}, {K_VOL, K_OCT, K_TEMPO, K_AI}};
+    {K_SQBPM, K_SQLVL, K_SQSND, K_SQNOTE}, {K_MXVOL, K_MXPAN, K_MXFX, K_MXMUTE}, {K_MIN, K_MOUT, K_MSYNC, K_MCLK}};
 static const char *const K_LBL[] = {"Wave", "Detune", "Mix", "Drive", "Cutoff", "Reso", "Env", "KeyTrk", "Attack",
     "Decay", "Sustain", "Release", "LFO", "Vibrato", "LFO>Cut", "F.Decay", "Pattern", "Tempo", "Octaves", "Gate",
     "Chorus", "Echo", "Time", "Reverb", "Volume", "Octave", "Tempo", "Arp AI", "Tempo", "Level", "Sound", "Note",
-    "Volume", "Pan", "Reverb", "Mute"};
+    "Volume", "Pan", "Reverb", "Mute", "In Ch", "Out Ch", "Sync", "Clk Out"};
 static const char *k_lbl(int k)          /* (SEQUENCER: the drums' knobs say what they do there) */
 {
     if (!sel_track && k == K_SQSND) return "Inst";
@@ -101,6 +101,8 @@ static const char *k_lbl(int k)          /* (SEQUENCER: the drums' knobs say wha
     return K_LBL[k];
 }
 static void ai_apply(void);
+static void midi_out_release(void);
+static void midi_out_key(int n, int down);
 static float k_get(int k)
 {
     switch (k) {
@@ -139,6 +141,10 @@ static float k_get(int k)
     case K_MXPAN: return (tr[sel_track].pan + 1.f) / 2.f;
     case K_MXFX: return tr[sel_track].fx;
     case K_MXMUTE: return tr[sel_track].mute ? 1.f : 0.f;
+    case K_MIN: return (float)mset.in_ch / 16.f;
+    case K_MOUT: return (float)mset.out_ch / 16.f;
+    case K_MSYNC: return mset.sync ? 1.f : 0.f;
+    case K_MCLK: return mset.clk_out ? 1.f : 0.f;
     }
     return 0.f;
 }
@@ -186,6 +192,14 @@ static void k_set(int k, float v)
     case K_MXPAN: tr[sel_track].pan = v * 2.f - 1.f; break;
     case K_MXFX: tr[sel_track].fx = v; break;
     case K_MXMUTE: seq_mute(sel_track, v > .5f); break;
+    case K_MIN: case K_MOUT: case K_MSYNC: case K_MCLK: {   /* the MIDI settings: kept in the flash */
+        uint8_t *f = k == K_MIN ? &mset.in_ch : k == K_MOUT ? &mset.out_ch : k == K_MSYNC ? &mset.sync : &mset.clk_out;
+        uint8_t nv = (uint8_t)(k == K_MIN || k == K_MOUT ? (int)(v * 16.f + .5f) : v > .5f);
+        if (k == K_MCLK && nv != mset.clk_out && sq.playing && !ext_active()) od_midi_out(nv ? 0xFA : 0xFC, 0, 0);
+        if (k == K_MOUT && nv != mset.out_ch) midi_out_release();
+        if (nv != *f) { *f = nv; settings_dirty = 1; settings_ms = od_ms(); }
+        break;
+    }
     }
 }
 static void k_txt(int k, char *b)
@@ -239,6 +253,10 @@ static void k_txt(int k, char *b)
     }
     case K_MXFX: pct_txt(b, tr[sel_track].fx); break;
     case K_MXMUTE: cat(b, tr[sel_track].mute ? "ON" : "OFF"); break;
+    case K_MIN: if (mset.in_ch) fmt_i(b, mset.in_ch); else cat(b, "ALL"); break;
+    case K_MOUT: if (mset.out_ch) fmt_i(b, mset.out_ch); else cat(b, "OFF"); break;
+    case K_MSYNC: cat(b, mset.sync ? "EXT" : "INT"); break;
+    case K_MCLK: cat(b, mset.clk_out ? "ON" : "OFF"); break;
     default: b[0] = 0;
     }
 }
@@ -740,28 +758,38 @@ static void ui_selftest(char **e)             /* the cutoff knob's mapping, ther
 }
 static uint32_t st_fps, st_cpu;
 void od_stats(uint32_t fps, uint32_t cpu) { st_fps = fps; st_cpu = cpu; }
+/* MIDI (the GLO button): the four settings on the knobs, what comes in, and the FM-1's own state below */
+static uint32_t min_ms;                  /* the last message in */
+static char min_txt[24];
 static void dr_glo(float W, float H)
 {
-    static const char *const K[10] = {"FIRMWARE", "ENGINE", "VOICES", "VOLUME", "OCTAVE", "HOLD", "ARP AI", "SCREEN", "TEST",
-        "BATTERY"};
+    static const char *const K[10] = {"MIDI IN", "MIDI OUT", "CLOCK SYNC", "CLOCK OUT", "USB", "LAST IN", "FIRMWARE",
+        "BATTERY", "SCREEN", "TEST"};
     char v[10][64];
     int i;
+    uint32_t now = od_ms();
     (void)W; (void)H;
-    cat(cat(v[0], "ONDADREAM "), OD_VERSION);
-    cat(v[1], "2 OSC + FILTER");
-    cat(fmt_i(v[2], voices_active()), " / 8");
-    pct_txt(v[3], P.vol);
-    { char *e = v[4]; if (oct_shift > 0) *e++ = '+'; fmt_i(e, oct_shift); }
-    cat(v[5], hold ? "ON" : "OFF");
-    cat(v[6], ai_on ? "ON" : "OFF");
-    { char *e = fmt_i(v[7], (int)st_fps); e = cat(e, " FPS  CPU "); e = fmt_i(e, (int)st_cpu); cat(e, " %"); }
-    cat(v[8], od_test_txt);
-    if (batt_raw < 0) cat(v[9], "-");
-    else { char *e = cat(v[9], batt_usb ? "USB" : ""); if (!batt_usb) { e = fmt_i(e, batt_lvl); e = cat(e, "/3"); } e = cat(e, "  ADC "); fmt_i(e, batt_raw); }
+    if (mset.in_ch) fmt_i(cat(v[0], "CHANNEL "), mset.in_ch); else cat(v[0], "ALL CHANNELS");
+    if (mset.out_ch) fmt_i(cat(v[1], "CHANNEL "), mset.out_ch); else cat(v[1], "OFF");
+    if (!mset.sync) cat(v[2], "INTERNAL");
+    else if (ext_active()) cat(fmt_i(cat(v[2], "EXTERNAL "), seq_bpm_shown()), " BPM");
+    else cat(v[2], "EXTERNAL: NO CLOCK");
+    if (!mset.clk_out) cat(v[3], "OFF");
+    else if (ext_active()) cat(v[3], "ON (FOLLOWING)");
+    else cat(fmt_i(cat(v[3], "ON "), sq.bpm), " BPM");
+    cat(v[4], batt_raw < 0 ? "-" : batt_usb ? "CONNECTED" : "NOT CONNECTED");
+    cat(v[5], min_ms ? min_txt : "-");
+    cat(cat(v[6], "ONDADREAM "), OD_VERSION);
+    if (batt_raw < 0) cat(v[7], "-");
+    else { char *e = cat(v[7], batt_usb ? "USB" : ""); if (!batt_usb) { e = fmt_i(e, batt_lvl); e = cat(e, "/3"); } e = cat(e, "  ADC "); fmt_i(e, batt_raw); }
+    { char *e = fmt_i(v[8], (int)st_fps); e = cat(e, " FPS  CPU "); e = fmt_i(e, (int)st_cpu); cat(e, " %"); }
+    cat(v[9], od_test_txt);
     for (i = 0; i < 10; i++) {
         text(&F_SILK8, 10, 14.f + (float)i * 15.f, K[i], C_FAINT, TA_L);
         text(&F_PX10, 230, 14.f + (float)i * 15.f, v[i], hexc(0xE9EBEE), TA_R);
     }
+    if (min_ms && now - min_ms < 150u) dot(4, 11.f + 5.f * 15.f, 2, C_GREEN);   /* a message now */
+    fill_rect(8, 19 + 93, 224, 1, hexc(0x1E2024));   /* the FM-1's own, below */
 }
 
 /* ---- SEQUENCER (the whole screen) and MIXER ---- */
@@ -784,7 +812,7 @@ static void dr_seq_full(uint32_t now)
     float bw;
     fill_rect(0, 0, 240, 240, 0);
     /* the top: the tempo, the position, rec */
-    fmt_i(b, sq.bpm);
+    fmt_i(b, seq_bpm_shown());
     text(&F_PX30, 6, 30, b, hexc(0xE8EAED), TA_L);
     bw = (float)text_w16(&F_PX30, b) / 16.f;
     text(&F_PX10, 10.f + bw, 30, "bpm", hexc(0x9AA0A8), TA_L);
@@ -1132,12 +1160,50 @@ void od_key(uint32_t k, int down)
     if (k >= 27u) return;
     n = KB_BASE + 12 * oct_shift + (int)k;
     if (down && step_mode() && !od_splash()) { step_press(k); return; }   /* SEQUENCER / MIXER: the keys are steps */
-    if (down) { keys_down |= 1u << k; key_on(n, .85f); record_note(n); }
-    else if (keys_down >> k & 1u) { keys_down &= ~(1u << k); key_off(n); }
+    if (down) { keys_down |= 1u << k; key_on(n, .85f); record_note(n); midi_out_key(n, 1); }
+    else if (keys_down >> k & 1u) { keys_down &= ~(1u << k); key_off(n); midi_out_key(n, 0); }
+}
+static void midi_seen(uint8_t st, uint8_t d1, uint8_t d2)   /* MIDI: the last message in, for the page */
+{
+    uint8_t c = st & 0xF0u;
+    char *e = min_txt;
+    if (st >= 0xF8u) { if (st != 0xF8u) cat(e, st == 0xFAu ? "START" : st == 0xFBu ? "CONTINUE" : "STOP"); else if (!min_ms || od_ms() - min_ms > 300u) cat(e, "CLOCK"); else return; }
+    else {
+        if (c == 0x90u && d2) { e = cat(e, "NOTE "); note_txt(e, d1); e += od_strlen(e); }
+        else if (c == 0x80u || c == 0x90u) { e = cat(e, "OFF "); note_txt(e, d1); e += od_strlen(e); }
+        else if (c == 0xB0u) { e = cat(e, "CC "); e = fmt_i(e, d1); *e++ = '='; e = fmt_i(e, d2); }
+        else if (c == 0xE0u) e = cat(e, "PITCH BEND");
+        else e = cat(e, "MESSAGE");
+        e = cat(e, "  CH "); fmt_i(e, (st & 15) + 1);
+    }
+    min_ms = od_ms() | 1u;
+}
+/* MIDI OUT: the panel's keys, as played (OUT channel; 0 off) */
+static uint8_t mout_on[128];             /* the notes sent on, with their channel + 1 */
+static void midi_out_release(void)       /* the notes on, off (the channel changes, or OFF) */
+{
+    int n;
+    for (n = 0; n < 128; n++)
+        if (mout_on[n]) { od_midi_out((uint8_t)(0x80u | (mout_on[n] - 1u)), (uint8_t)n, 0); mout_on[n] = 0; }
+}
+static void midi_out_key(int n, int down)
+{
+    if (n < 0 || n > 127) return;
+    if (down && mset.out_ch) {
+        if (mout_on[n]) od_midi_out((uint8_t)(0x80u | (mout_on[n] - 1u)), (uint8_t)n, 0);
+        od_midi_out((uint8_t)(0x90u | (mset.out_ch - 1u)), (uint8_t)n, 108);   /* (the keys' velocity: .85) */
+        mout_on[n] = mset.out_ch;
+    } else if (!down && mout_on[n]) {
+        od_midi_out((uint8_t)(0x80u | (mout_on[n] - 1u)), (uint8_t)n, 0);
+        mout_on[n] = 0;
+    }
 }
 void od_midi(uint8_t st, uint8_t d1, uint8_t d2)
 {
     uint8_t c = st & 0xF0u;
+    if (st >= 0xF8u) { midi_seen(st, 0, 0); seq_realtime(st); return; }   /* the clock and the transport */
+    if (c >= 0x80u && c < 0xF0u && mset.in_ch && (st & 15u) + 1u != mset.in_ch) return;   /* not our channel */
+    if (c >= 0x80u && c < 0xF0u) midi_seen(st, d1, d2);
     if (c == 0x90u && d2) { midi_held[d1 & 127u] = 1; key_on(d1 & 127u, (float)d2 / 127.f); record_note(d1 & 127u); }
     else if (c == 0x80u || (c == 0x90u && !d2)) { midi_held[d1 & 127u] = 0; key_off(d1 & 127u); }
 }
@@ -1151,7 +1217,12 @@ void od_button(uint32_t b, int down)
     case OB_EDIT: set_page(PG_FILTER); break;
     case OB_ENV: set_page(PG_ENV); break;
     case OB_LFO: set_page(PG_MOD); break;
-    case OB_ARP: set_page(PG_ARP); break;
+    case OB_ARP:                                 /* ARP on ARPEGGIO: ARP AI on / off */
+        if (page != PG_ARP) { set_page(PG_ARP); break; }
+        ai_on = (uint8_t)!ai_on;
+        if (ai_on) ai_apply();
+        toast(ai_on ? "ARP AI ON" : "ARP AI OFF");
+        break;
     case OB_FX: set_page(PG_FX); break;
     case OB_GLO: set_page(PG_GLO); break;
     case OB_SCL:
@@ -1201,7 +1272,8 @@ void od_enc(uint32_t e, int32_t s)
     default: {
         int k = (int)e - OE_K1, id = PG_K[page][k];
         float step = id == K_WAVE ? 1.f / 3.f : id == K_APAT ? .25f : id == K_AOCT ? .5f : id == K_OCT ? 1.f / 6.f
-                   : id == K_AI || id == K_MXMUTE ? 1.f : id == K_SQBPM ? 1.f / 200.f
+                   : id == K_AI || id == K_MXMUTE || id == K_MSYNC || id == K_MCLK ? 1.f : id == K_MIN || id == K_MOUT ? 1.f / 16.f
+                   : id == K_SQBPM ? 1.f / 200.f
                    : id == K_SQLVL || id == K_MXVOL || id == K_MXPAN || id == K_MXFX ? 1.f / 100.f
                    : id == K_SQSND ? (sel_track ? 1.f / (float)(n_presets() - 1) : 1.f / 7.f)
                    : id == K_SQNOTE ? (sel_track ? 1.f / (float)(PIANO_ROWS - 1) : 1.f / (float)(NRHY - 1)) : 1.f / 128.f;

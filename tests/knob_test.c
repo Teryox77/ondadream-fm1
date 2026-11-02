@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "../src/core/od.h"
 static uint32_t T; uint32_t od_ms(void){return T;}
+void od_midi_out(uint8_t st, uint8_t d1, uint8_t d2) { (void)st; (void)d1; (void)d2; }
 #include "../src/core/od.c"
 int main(){od_init();T=5000;int bad=0;
  int ids[]={K_CUT,K_A,K_D,K_R,K_LFO,K_FDEC,K_ETIME,K_RESO,K_DETUNE,K_DRIVE,K_ABPM,K_VIB};

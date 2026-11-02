@@ -9,6 +9,7 @@ static unsigned long long log_base;
 #define OUTFMT "/tmp/fid/c_%d.f32"
 #endif
 uint32_t od_ms(void) { return (uint32_t)(samples * 1000u / 44100u); }
+void od_midi_out(uint8_t st, uint8_t d1, uint8_t d2) { (void)st; (void)d1; (void)d2; }
 #include "od.c"
 static int32_t lr[256];
 static void run(FILE *f, double sec)

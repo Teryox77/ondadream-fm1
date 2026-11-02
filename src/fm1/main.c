@@ -24,6 +24,7 @@
 #include "fm1_lcd_hw.h"
 #include "fm1_flash.h"
 #include "fm1_audio.h"
+#include "fm1_uart.h"
 #include "libc.c"
 #include "usb.c"
 #include "ota.c"
@@ -43,6 +44,14 @@ void *memmove(void *d, const void *s, unsigned n)
 /* the core reads the clock the tick keeps; its big buffers go to POOL (app.ld) */
 #define OD_BIG __attribute__((section(".pool")))
 uint32_t od_ms(void) { return fm1_ms; }
+/* MIDI out (the MIDI page: the keys' notes, the clock): a USB-MIDI event, cable 0; dropped with no computer */
+void od_midi_out(uint8_t st, uint8_t d1, uint8_t d2)
+{
+    uint32_t cin = st >= 0xF8u ? 0xFu : (uint32_t)(st >> 4);
+    if (st < 0x80u || (st >= 0xF0u && st < 0xF8u))
+        return;
+    midi_out_event(cin | (uint32_t)st << 8 | (uint32_t)d1 << 16 | (uint32_t)d2 << 24);
+}
 #include "od.c"
 
 /* ---- the panel: which matrix id carries which printed label (measured on the hardware) ---- */
@@ -70,6 +79,51 @@ static void midi_drain(void)
         od_midi((uint8_t)(pkt >> 8), (uint8_t)((pkt >> 16) & 0x7Fu), (uint8_t)((pkt >> 24) & 0x7Fu));
     }
 }
+/* MIDI IN on the TRS jack: UART1 at 31250 baud, DMA into a ring, read here (the audio ISR, every 2.9 ms: ~9 bytes)
+ * and parsed: running status, realtime between bytes; SysEx and system common skipped */
+#define TRS_RING 256u
+static volatile uint8_t trs_ring[TRS_RING] __attribute__((aligned(16)));
+static struct { uint32_t rd; uint8_t st, n, need, d0, skip; } trs;
+static void trs_byte(uint8_t b)
+{
+    if (b >= 0xF8u) {                           /* realtime: the clock, START, CONTINUE, STOP */
+        if (b == 0xF8u || b == 0xFAu || b == 0xFBu || b == 0xFCu)
+            od_midi(b, 0, 0);
+        return;
+    }
+    if (b & 0x80u) {
+        trs.skip = b >= 0xF0u;                  /* SysEx, system common: until the next status */
+        trs.st = b < 0xF0u ? b : 0u;
+        trs.need = (b & 0xE0u) == 0xC0u ? 1u : 2u;
+        trs.n = 0;
+        return;
+    }
+    if (trs.skip || !trs.st)
+        return;
+    if (trs.need == 2u && !trs.n) {
+        trs.d0 = b;
+        trs.n = 1;
+        return;
+    }
+    trs.n = 0;
+    if (trs.need == 2u)
+        od_midi(trs.st, trs.d0, b);
+    else
+        od_midi(trs.st, b, 0);
+}
+static void trs_take(void)
+{
+    uint32_t n = fm1_uart1_rx_take();
+    if (n > TRS_RING) {                         /* (fell behind: the oldest are gone) */
+        trs.rd = (trs.rd + n - TRS_RING) % TRS_RING;
+        n = TRS_RING;
+        trs.st = 0;
+    }
+    while (n--) {
+        trs_byte(trs_ring[trs.rd]);
+        trs.rd = (trs.rd + 1u) % TRS_RING;
+    }
+}
 static void panel_take(void)
 {
     uint32_t i, d, n = fm1_in.notes, b = fm1_in.buttons;
@@ -89,6 +143,7 @@ static void panel_take(void)
             od_enc(i, st);
     }
     midi_drain();
+    trs_take();
 }
 
 /* ---- audio ---- */
@@ -355,6 +410,7 @@ static void app_main(void)
     lcd_init();
     boot_stage(3);
     fm1_input_init();
+    fm1_uart1_midi_init(trs_ring, TRS_RING);    /* the TRS MIDI IN (before the tick: port H) */
     fm1_timer5_start(isr_timer5, 4);            /* the key scan and the ms clock from here (the rescue needs them) */
     {
         uint32_t f = irq_save();

@@ -284,11 +284,24 @@ static int sel_step_on(int t, int col)
     return t ? (int)(tr[t].grid[tr[t].sel_note] >> col & 1u) : drum_has(sel_drum, col);
 }
 
+/* ---------------------------------------------------------------- MIDI: the settings, the clock --- */
+static struct { uint8_t in_ch, out_ch, sync, clk_out; } mset = {0, 1, 0, 0};   /* in 0 = all; out 0 = off */
+static uint8_t settings_dirty;
+static uint32_t settings_ms;
+/* the clock that comes in (sync EXT): 24 a beat, its time on the sample clock, a sixteenth every 6 */
+static struct { uint32_t last, cnt; float tick; } xclk;   /* tick: samples per clock, averaged; 0 none yet */
+static float clk_acc;                    /* the clock that goes out: samples to its next tick */
+static int ext_active(void)              /* following a clock that is there now (else the own tempo, as INT) */
+{
+    return mset.sync && xclk.tick > 0.f && sclock - xclk.last < (uint32_t)OD_FS / 2u;
+}
+static float ext_step(void) { return xclk.tick * 6.f; }
 static uint32_t seq_step_samples(void)
 {
-    uint32_t s = (uint32_t)((float)OD_FS * 60.f / (float)sq.bpm / 4.f + .5f);
+    uint32_t s = ext_active() ? (uint32_t)(ext_step() + .5f) : (uint32_t)((float)OD_FS * 60.f / (float)sq.bpm / 4.f + .5f);
     return s ? s : 1u;
 }
+static int seq_bpm_shown(void) { return ext_active() ? (int)((float)OD_FS * 60.f / (xclk.tick * 24.f) + .5f) : sq.bpm; }
 static void seq_release_row(int r)
 {
     uint32_t k;
@@ -352,15 +365,20 @@ static void seq_fire(void)
     sq.vis = (int8_t)col;
     sq.step = (uint8_t)((sq.step + 1u) % 16u);
 }
+static void clk_send(uint8_t st) { if (mset.clk_out && !ext_active()) od_midi_out(st, 0, 0); }
 static void seq_play(void)
 {
     if (sq.playing) return;
     sq.playing = 1;
     sq.step = 0;
-    sq.next = sclock;
+    sq.next = ext_active() ? NONE : sclock;      /* (following a clock: the next sixteenth of it) */
+    xclk.cnt = 0;
+    clk_send(0xFA);
+    clk_acc = 0.f;                               /* the clock out: a tick with the first step */
 }
 static void seq_stop(void)
 {
+    if (sq.playing) clk_send(0xFC);
     sq.playing = 0;
     sq.next = NONE;
     sq.vis = -1;
@@ -373,12 +391,42 @@ static void seq_mute(int t, int m)
     if (m && t > 0) seq_release_row(t);
 }
 
+/* the clock and the transport that come in (from od_midi, before the audio): with sync EXT the steps of the
+ * sequencer and of the arpeggiator fall on every sixth clock */
+static void seq_realtime(uint8_t st)
+{
+    if (!mset.sync) return;
+    if (st == 0xF8u) {
+        uint32_t d = sclock - xclk.last;
+        if (xclk.last && d > 0u && d < (uint32_t)OD_FS / 2u)
+            xclk.tick = xclk.tick > 0.f ? xclk.tick + ((float)d - xclk.tick) * .125f : (float)d;
+        xclk.last = sclock ? sclock : 1u;
+        if (xclk.cnt % 6u == 0u && xclk.tick > 0.f) {   /* a sixteenth: the steps on it */
+            int32_t half = (int32_t)(ext_step() * .5f);
+            if (sq.playing && (sq.next == NONE || (int32_t)(sq.next - sclock) <= half)) sq.next = sclock;
+            if (arp_on() && arp.next != 0xFFFFFFFFu && (int32_t)(arp.next - sclock) <= half) arp.next = sclock;
+        }
+        xclk.cnt++;
+    } else if (st == 0xFAu) {                    /* START: from the first step, on the next clock */
+        seq_stop();
+        sq.playing = 1;
+        sq.step = 0;
+        sq.next = NONE;
+        xclk.cnt = 0;
+    } else if (st == 0xFBu) {                    /* CONTINUE */
+        if (!sq.playing) { sq.playing = 1; sq.next = NONE; xclk.cnt = 0; }
+    } else if (st == 0xFCu) {
+        seq_stop();
+    }
+}
+
 /* ---- the engine's side (od_audio) ---- */
 static struct { int8_t note; uint32_t ms; } aud[4];   /* the steps' preview notes: off after 180 ms */
 static void key_off(int n);
 static void seq_control(void)
 {
     uint32_t r, k, now = od_ms();
+    if (sq.playing && sq.next == NONE && !ext_active()) sq.next = sclock;   /* the clock went away: on our own */
     for (r = 1; r < NTR; r++)
         if (tp_for[r] != tr[r].preset) {
             patch_voice(&tp[r], preset_at(tr[r].preset));
@@ -409,7 +457,7 @@ static void seq_events(uint32_t now)
     uint32_t r;
     if (sq.playing && sq.next != NONE && (int32_t)(now - sq.next) >= 0) {
         seq_fire();
-        sq.next = now + seq_step_samples();
+        sq.next = now + seq_step_samples();      /* (following a clock: its next sixteenth moves this onto it) */
     }
     for (r = 1; r < NTR; r++)
         if (sq.gate[r] != NONE && (int32_t)(now - sq.gate[r]) >= 0) seq_release_row((int)r);
@@ -423,4 +471,71 @@ static void seq_gains(int32_t *pl, int32_t *pr, int32_t *fx)   /* Q14: cos / sin
         pr[r] = (int32_t)(sin_t(a) * 16384.f + .5f);
         fx[r] = (int32_t)(CLAMP(tr[r].fx, 0.f, 1.f) * 16384.f + .5f);
     }
+}
+
+/* the clock that goes out (CLOCK OUT on, not following one): 24 a beat at the sequencer's tempo, each control block */
+static void clk_tick(uint32_t m)
+{
+    if (!mset.clk_out || ext_active()) return;
+    clk_acc -= (float)m;
+    while (clk_acc <= 0.f) {
+        od_midi_out(0xF8, 0, 0);
+        clk_acc += (float)OD_FS * 60.f / ((float)sq.bpm * 24.f);
+    }
+}
+
+/* the store's image: "ODU2", the count, the MIDI settings (4 bytes), then each preset's 25 numbers (the order of
+ * od_preset_t), little-endian ("ODU1": without the settings) */
+static void put32(uint8_t *b, uint32_t v) { b[0] = (uint8_t)v; b[1] = (uint8_t)(v >> 8); b[2] = (uint8_t)(v >> 16); b[3] = (uint8_t)(v >> 24); }
+static uint32_t get32(const uint8_t *b) { return (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24; }
+int od_store_dirty(void)                  /* a SAVE at once; the settings once they stay put for 2 s */
+{
+    if (settings_dirty && od_ms() - settings_ms >= 2000u) { settings_dirty = 0; store_dirty = 1; }
+    if (!store_dirty) return 0;
+    store_dirty = 0;
+    return 1;
+}
+uint32_t od_store_image(uint8_t *b, uint32_t max)
+{
+    int k, j;
+    if (max < 12u + (uint32_t)n_user * 100u) return 0;
+    put32(b, 0x3255444Fu);
+    put32(b + 4, (uint32_t)n_user);
+    b[8] = mset.in_ch; b[9] = mset.out_ch; b[10] = mset.sync; b[11] = mset.clk_out;
+    for (k = 0; k < n_user; k++)
+        for (j = 0; j < 25; j++) {
+            union { float f; uint32_t u; } c;
+            c.f = (&user_p[k].wave)[j];
+            put32(b + 12 + k * 100 + j * 4, c.u);
+        }
+    return 12u + (uint32_t)n_user * 100u;
+}
+int od_store_load(const uint8_t *b, uint32_t n)   /* 0: taken; -1: not a store (the presets stay as they are) */
+{
+    /* each number in a sane range (the knobs' and the presets' with room): a damaged store must not reach the voices */
+    static const float LO[25] = {0, -48, 0, 0, 20, 0, 0, 0, .0005f, .001f, 0, .001f, .01f, 0, 0, .005f, 0, 0, 20, 1, 0, 0, 0, .02f, 0};
+    static const float HI[25] = {3, 48, 1, 16, 20000, 1, 1, 1, 10, 10, 1, 10, 40, 100, 1, 10, 1, 4, 300, 3, 1, 1, 1, 1.5f, 1};
+    uint32_t cnt, k, j, h;
+    if (n < 8u || (get32(b) != 0x3155444Fu && get32(b) != 0x3255444Fu)) return -1;
+    h = get32(b) == 0x3255444Fu ? 12u : 8u;
+    cnt = get32(b + 4);
+    if (cnt > OD_MAXUSER || n < h + cnt * 100u) return -1;
+    if (h == 12u && (b[8] > 16u || b[9] > 16u || b[10] > 1u || b[11] > 1u)) return -1;
+    for (k = 0; k < cnt; k++)
+        for (j = 0; j < 25u; j++) {
+            union { float f; uint32_t u; } c;
+            c.u = get32(b + h + k * 100u + j * 4u);
+            if (!(c.f >= LO[j] - .0001f && c.f <= HI[j] + .0001f)) return -1;   /* (NaN fails too) */
+        }
+    for (k = 0; k < cnt; k++) {
+        for (j = 0; j < 25u; j++) {
+            union { float f; uint32_t u; } c;
+            c.u = get32(b + h + k * 100u + j * 4u);
+            (&user_p[k].wave)[j] = c.f;
+        }
+        user_name_set((int)k);
+    }
+    n_user = (int)cnt;
+    if (h == 12u) { mset.in_ch = b[8]; mset.out_ch = b[9]; mset.sync = b[10]; mset.clk_out = b[11]; }
+    return 0;
 }
