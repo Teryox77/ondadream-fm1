@@ -1410,6 +1410,27 @@ uint32_t od_leds_keys(void)              /* bit k: key k lit */
             m |= 1u << ((uint32_t)vc[i].note - base);
     return m;
 }
+/* the keys' LEDs with a trail: a key going dark fades out, through the mid level and the glow */
+#define TRAIL_MID_MS 160u
+#define TRAIL_END_MS 450u
+static uint32_t led_prev, led_trail, led_off_ms[27];
+void od_leds_key_levels(uint8_t *lv)
+{
+    uint32_t m = od_leds_keys(), now = od_ms(), i;
+    for (i = 0; i < 27u; i++) {
+        uint32_t b = 1u << i;
+        if (m & b) { lv[i] = 3; led_trail &= ~b; continue; }
+        if (led_prev & b) { led_trail |= b; led_off_ms[i] = now; }
+        lv[i] = 0;
+        if (led_trail & b) {
+            uint32_t d = now - led_off_ms[i];
+            if (d < TRAIL_MID_MS) lv[i] = 2;
+            else if (d < TRAIL_END_MS) lv[i] = 1;
+            else led_trail &= ~b;
+        }
+    }
+    led_prev = m;
+}
 uint32_t od_leds_buttons(void)           /* bit b: button b (OB_*) lit */
 {
     static const uint8_t PB[PG_N] = {OB_HOME, OB_EDIT, OB_ENV, OB_LFO, OB_ARP, OB_FX, OB_SEQ, OB_SEQ, OB_GLO};

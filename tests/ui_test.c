@@ -190,6 +190,20 @@ int main(void)
         if (bad) { printf("midi: %d failures\n", bad); return 1; }
         printf("midi ok\n");
     }
+    {   /* the keys' trail: lit while down, then mid, the glow, dark */
+        uint8_t lv[27];
+        int bad = 0;
+        od_button(OB_HOME, 1);
+        od_leds_key_levels(lv);
+        od_key(3, 1); tick(20); od_leds_key_levels(lv); if (lv[3] != 3) { printf("trail: key down not lit (%d)\n", lv[3]); bad++; }
+        od_key(3, 0); tick(5); od_leds_key_levels(lv); if (lv[3] != 2) { printf("trail: just released %d\n", lv[3]); bad++; }
+        tick(200); od_leds_key_levels(lv); if (lv[3] != 1) { printf("trail: at 200 ms %d\n", lv[3]); bad++; }
+        tick(300); od_leds_key_levels(lv); if (lv[3] != 0) { printf("trail: at 500 ms %d\n", lv[3]); bad++; }
+        od_key(3, 1); tick(20); od_key(3, 0); tick(50); od_key(3, 1); od_leds_key_levels(lv); if (lv[3] != 3) { printf("trail: pressed again not lit\n"); bad++; }
+        od_key(3, 0);
+        if (bad) { printf("trail: %d failures\n", bad); return 1; }
+        printf("trail ok\n");
+    }
     printf("ok, %u ms\n", now_ms);
     return 0;
 }

@@ -81,7 +81,7 @@ def build_app(product):
     img += b"\xff" * (-len(img) % 4)
     bss_end, pool_end = sym(syms, "_bss_end"), sym(syms, "_pool_end")
     where = " ".join(f"{n}={sym(syms, n) or 0:#x}" for n in ("rowbuf", "abuf", "ep1rx", "fbuf", "dl_l", "fm1_crash", "od_guard",
-                                                           "od_diag", "fm1_crash_ctx", "bootguard"))
+                                                           "od_diag", "fm1_crash_ctx", "bootguard", "fm1_led", "fm1_led_mid", "fm1_led_dim"))
     note = f"app: {len(img)} B in flash; .bss to {bss_end:#x} (< 0x1c1a000), pool to {pool_end:#x} (< 0x1c74000); {where}"
     print(note)
     if os.environ.get("GITHUB_ACTIONS"):

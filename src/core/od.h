@@ -33,6 +33,7 @@ void od_battery(int32_t raw, int usb);      /* the battery's ADC (0..1023, filte
 void od_selftest(void);                    /* once, at start (before the audio): GLOBAL shows the result */ /* the platform's screen rate and audio load (%), shown on GLOBAL */
 void od_midi(uint8_t st, uint8_t d1, uint8_t d2);   /* a channel message (USB MIDI, TRS) */
 uint32_t od_leds_keys(void);               /* bit k: key k lit (27 keys) */
+void od_leds_key_levels(uint8_t *lv);      /* the 27 keys: 3 lit, 2 mid, 1 glow, 0 dark (lit keys leave a fading trail) */
 uint32_t od_leds_buttons(void);            /* bit b: button b (OB_*) lit */
 int od_splash(void);                       /* 1 while the power-on splash runs */
 /* the presets saved with SAVE: the platform keeps the image (the FM-1 in its flash) */

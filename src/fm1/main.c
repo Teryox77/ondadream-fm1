@@ -325,6 +325,22 @@ static void store_quiet(void)                   /* the erase stops the interrupt
 }
 #include "fm1_store.c"
 
+/* a key's LED at a level: 3 lit, 2 mid (the BSP's mid frames, with the glow under them), 1 the glow, 0 dark */
+static uint8_t leds_lv[27] = {9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9};
+static uint32_t leds_k2 = ~0u;
+static void led_level(uint32_t id, uint32_t lv)
+{
+    uint32_t p, r;
+    for (p = 0; p < FM1_NCOL; p++)
+        for (r = 1; r < 5u; r++)
+            if (FM1_KEYMAP[r][p] == (int8_t)id) {
+                uint8_t bit = (uint8_t)(1u << r);
+                if (lv == 3u) fm1_led[p] |= bit; else fm1_led[p] &= (uint8_t)~bit;
+                if (lv == 2u) fm1_led_mid[p] |= bit; else fm1_led_mid[p] &= (uint8_t)~bit;
+                if (lv == 2u || lv == 1u) fm1_led_dim[p] |= bit; else fm1_led_dim[p] &= (uint8_t)~bit;
+            }
+}
+
 /* ---- the main loop ---- */
 static void app_main(void)
 {
@@ -415,14 +431,26 @@ static void app_main(void)
             }
         }
         /* the LEDs */
-        n = od_leds_keys();
-        b = od_leds_buttons();
-        if (n != leds_k) {
+        {   /* the keys, with their trail: lit, mid (+ the glow), the glow, dark */
+            uint8_t lv[27];
+            od_leds_key_levels(lv);
+            n = 0;
             for (i = 0; i < 27u; i++)
-                if ((n ^ leds_k) & (1u << i))
-                    fm1_led_key(14u + i, (int)((n >> i) & 1u));
-            leds_k = n;
+                n |= (uint32_t)lv[i] << (2u * (i & 15u));   /* (a change check: two words of levels) */
+            b = 0;
+            for (i = 16; i < 27u; i++)
+                b |= (uint32_t)lv[i] << (2u * (i - 16u));
+            if (n != leds_k || b != leds_k2) {
+                for (i = 0; i < 27u; i++)
+                    if (lv[i] != leds_lv[i]) {
+                        led_level(14u + i, lv[i]);
+                        leds_lv[i] = lv[i];
+                    }
+                leds_k = n;
+                leds_k2 = b;
+            }
         }
+        b = od_leds_buttons();
         if (b != leds_b) {
             for (i = 0; i < OB_N; i++)
                 if ((b ^ leds_b) & (1u << i))

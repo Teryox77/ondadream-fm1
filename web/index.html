@@ -54,6 +54,8 @@
   .key::after{content:"";position:absolute;left:50%;top:14px;bottom:14px;width:3px;margin-left:-1.5px;border-radius:2px;background:rgba(235,226,228,.75)}
   .key.on{background:linear-gradient(90deg,#c6833f 0%,#e9a75a 45%,#c98640 100%);box-shadow:0 0 14px rgba(240,160,70,.6),inset 0 -3px 4px rgba(0,0,0,.25)}
   .key.on::after{background:#fff4e2}
+  .key.lv2{background:linear-gradient(90deg,#8a5d33 0%,#a87545 45%,#8c5f35 100%);box-shadow:0 0 8px rgba(240,160,70,.3)}
+  .key.lv1{background:linear-gradient(90deg,#5e4130 0%,#70503a 45%,#604331 100%)}
 
   .help{max-width:830px;width:100%;font-size:12px;color:#9a9ea5;line-height:1.55;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
   .help div{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:10px;padding:10px 12px}
@@ -172,7 +174,8 @@ function loop(t){
   }
   g.putImageData(img, 0, 0);
   const lk = X.web_leds_keys(), lb = X.web_leds_buttons();
-  keyEls.forEach((el, k) => el.classList.toggle("on", !!((lk >>> k) & 1)));
+  const lv = new Uint8Array(X.memory.buffer, X.web_leds_levels(), 27);   /* lit, and the trail behind */
+  keyEls.forEach((el, k) => { el.classList.toggle("on", lv[k] === 3); el.classList.toggle("lv2", lv[k] === 2); el.classList.toggle("lv1", lv[k] === 1); });
   for (const [name, id] of Object.entries(BTN_ID)) btnEls[name].classList.toggle("led", !!((lb >>> id) & 1));
   requestAnimationFrame(loop);
 }

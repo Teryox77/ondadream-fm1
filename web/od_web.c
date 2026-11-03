@@ -36,6 +36,8 @@ EXPORT void web_enc(uint32_t e, int32_t s) { od_enc(e, s); }
 EXPORT void web_master(uint32_t v) { od_master(v); }
 EXPORT void web_midi(uint32_t st, uint32_t d1, uint32_t d2) { od_midi((uint8_t)st, (uint8_t)d1, (uint8_t)d2); }
 EXPORT uint32_t web_leds_keys(void) { return od_leds_keys(); }
+static uint8_t web_lv[27];
+EXPORT uint8_t *web_leds_levels(void) { od_leds_key_levels(web_lv); return web_lv; }
 EXPORT uint32_t web_leds_buttons(void) { return od_leds_buttons(); }
 EXPORT void web_stats(uint32_t fps, uint32_t cpu) { od_stats(fps, cpu); }
 /* SAVE: the presets kept in the browser (localStorage, by the page) */
