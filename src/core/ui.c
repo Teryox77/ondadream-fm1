@@ -325,15 +325,16 @@ static void viz_make(int i)
 }
 
 /* the screen's own starfield */
-static uint8_t gst_x[170], gst_y[170], gst_s[170], gst_c0[170], gst_c1[170];
+static uint8_t gst_s[170], gst_c0[170], gst_c1[170];
+static float gst_x[170], gst_y[170];   /* from the sky's middle (120, 78 in the scene) */
 static float gst_tw[170], gst_ph[170], gst_rt[170];
 static const uint32_t STAR_TINT[6] = {0xE6ECF5, 0x7FB2FF, 0xFFD27A, 0xFF8FC8, 0x7FFFD4, 0xC49BFF};
 static void stars_init(void)
 {
     int i;
     for (i = 0; i < 170; i++) {
-        gst_x[i] = (uint8_t)(rnd() % 240u);
-        gst_y[i] = (uint8_t)(rnd() % 157u);
+        gst_x[i] = (float)(rnd() % 240u) - 120.f;
+        gst_y[i] = (float)(rnd() % 157u) - 78.f;
         gst_tw[i] = rndf() * 6.28f;
         gst_s[i] = rndf() < .12f ? 2 : 1;
         gst_c0[i] = (uint8_t)(rnd() % 6u);       /* each star drifts between two tints, at its own pace */
@@ -346,19 +347,58 @@ static void stars_init(void)
 static struct { uint8_t on; uint32_t t0, next; float x0, y0, vx, vy, len; uint16_t c; } comet = {0, 0, 4000u};
 static uint32_t comet_rng = 0x6B43A9B5u;
 static float comet_rf(void) { comet_rng ^= comet_rng << 13; comet_rng ^= comet_rng >> 17; comet_rng ^= comet_rng << 5; return (float)(comet_rng >> 8) * (1.f / 16777216.f); }
+/* the warp: each note played pushes the stars outwards from the middle, as through hyperspace; it fades in ~0.6 s
+ * (a slow drift always) */
+static float warp;
+static uint32_t warp_seen, sky_ms;
+static void sky_line(float x0, float y0, float x1, float y1, uint16_t c, float a)   /* a streak: bright at the head */
+{
+    float dx = x1 - x0, dy = y1 - y0, l = (dx < 0.f ? -dx : dx) > (dy < 0.f ? -dy : dy) ? (dx < 0.f ? -dx : dx) : (dy < 0.f ? -dy : dy);
+    int n = (int)l, i;
+    if (n > 40) n = 40;
+    for (i = 0; i <= n; i++) {
+        float t = n ? (float)i / (float)n : 1.f;
+        int32_t x = (int32_t)(x0 + dx * t + .5f), y = (int32_t)(y0 + dy * t + .5f);
+        if (y >= 19 && y < 176) blend(x, y, c, (uint32_t)(a * t * 256.f));
+    }
+}
 static void dr_sky(uint32_t now)
 {
     int k;
+    float dt = sky_ms ? (float)(now - sky_ms) * .001f : 0.f, grow;
+    if (dt > .1f) dt = .1f;
+    sky_ms = now;
+    if (note_flash_ms != warp_seen) { warp_seen = note_flash_ms; warp = warp + 1.6f > 4.f ? 4.f : warp + 1.6f; }
+    warp *= od_exp2(-dt * 2.4f);                 /* (~0.6 s) */
+    grow = (warp + .05f) * dt;                   /* the outward step: r grows by r x grow */
     for (k = 0; k < 170; k++) {
         float tw = .5f + .5f * g_sin((float)now * .0015f + gst_tw[k]), m = .5f + .5f * g_sin((float)now * gst_rt[k] + gst_ph[k]);
-        float a = gst_s[k] == 2 ? .35f + .6f * tw : .18f + .45f * tw;
+        float a = gst_s[k] == 2 ? .35f + .6f * tw : .18f + .45f * tw, x = gst_x[k], y = gst_y[k], r2, depth;
+        int32_t px, py;
         uint16_t c = mix565(hexc(STAR_TINT[gst_c0[k]]), hexc(STAR_TINT[gst_c1[k]]), (uint32_t)(m * 256.f));
-        blend(gst_x[k], 19 + gst_y[k], c, (uint32_t)(a * 256.f));
-        if (gst_s[k] == 2 && tw > .7f) {          /* the bright ones flare a little */
+        gst_x[k] = x + x * grow + (x < 0.f ? -1.f : 1.f) * grow * 6.f;
+        gst_y[k] = y + y * grow + (y < 0.f ? -1.f : 1.f) * grow * 4.f;
+        if (gst_x[k] < -121.f || gst_x[k] > 121.f || gst_y[k] < -79.f || gst_y[k] > 79.f) {   /* gone: born again near the middle */
+            float ang = rndf() * 6.2832f, rad = 4.f + rndf() * 30.f;
+            gst_x[k] = g_cos(ang) * rad;
+            gst_y[k] = g_sin(ang) * rad * .7f;
+            continue;
+        }
+        r2 = gst_x[k] * gst_x[k] + gst_y[k] * gst_y[k];
+        depth = r2 > 1600.f ? 1.f : r2 / 1600.f;  /* near the middle: far, faint */
+        a *= .25f + .75f * depth;
+        px = (int32_t)(120.f + gst_x[k] + .5f);
+        py = (int32_t)(97.f + gst_y[k] + .5f);
+        if (warp > .15f) {                        /* streaks, longer the faster */
+            float sl = warp * .09f;
+            sky_line(120.f + gst_x[k] * (1.f - sl), 97.f + gst_y[k] * (1.f - sl), 120.f + gst_x[k], 97.f + gst_y[k], c, a);
+            continue;
+        }
+        blend(px, py, c, (uint32_t)(a * 256.f));
+        if (gst_s[k] == 2 && tw > .7f && py > 19 && py < 175) {   /* the bright ones flare a little */
             uint32_t f = (uint32_t)((tw - .7f) * 1.2f * a * 256.f);
-            blend(gst_x[k] - 1, 19 + gst_y[k], c, f); blend(gst_x[k] + 1, 19 + gst_y[k], c, f);
-            if (gst_y[k] > 0) blend(gst_x[k], 18 + gst_y[k], c, f);
-            if (gst_y[k] < 156) blend(gst_x[k], 20 + gst_y[k], c, f);
+            blend(px - 1, py, c, f); blend(px + 1, py, c, f);
+            blend(px, py - 1, c, f); blend(px, py + 1, c, f);
         }
     }
     if (!comet.on && (int32_t)(now - comet.next) >= 0) {   /* a new comet: from the top or a side, downwards */
