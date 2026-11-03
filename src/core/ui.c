@@ -103,6 +103,7 @@ static const char *k_lbl(int k)          /* (SEQUENCER: the drums' knobs say wha
 static void ai_apply(void);
 static void midi_out_release(void);
 static void midi_out_key(int n, int down);
+static void activity(void);
 static float k_get(int k)
 {
     switch (k) {
@@ -1252,6 +1253,7 @@ void od_key(uint32_t k, int down)
 {
     int n;
     if (k >= 27u) return;
+    activity();
     n = KB_BASE + 12 * oct_shift + (int)k;
     if (down && step_mode() && !od_splash()) { step_press(k); return; }   /* SEQUENCER / MIXER: the keys are steps */
     if (down) { keys_down |= 1u << k; key_on(n, .85f); record_note(n); midi_out_key(n, 1); }
@@ -1295,6 +1297,7 @@ static void midi_out_key(int n, int down)
 void od_midi(uint8_t st, uint8_t d1, uint8_t d2)
 {
     uint8_t c = st & 0xF0u;
+    if (st < 0xF0u) activity();
     if (st >= 0xF8u) { midi_seen(st, 0, 0); seq_realtime(st); return; }   /* the clock and the transport */
     if (c >= 0x80u && c < 0xF0u && mset.in_ch && (st & 15u) + 1u != mset.in_ch) return;   /* not our channel */
     if (c >= 0x80u && c < 0xF0u) midi_seen(st, d1, d2);
@@ -1305,6 +1308,7 @@ void od_store_done(int ok) { if (!ok) toast("SAVE FAILED"); }
 static void set_page(int p) { page = p; }
 void od_button(uint32_t b, int down)
 {
+    if (down) activity();
     if (!down || od_splash()) return;
     switch (b) {
     case OB_HOME: set_page(PG_SYNTH); break;
@@ -1355,6 +1359,7 @@ void od_button(uint32_t b, int down)
 }
 void od_enc(uint32_t e, int32_t s)
 {
+    if (s) activity();
     if (!s || od_splash()) return;
     switch (e) {
     case OE_PRESET:
@@ -1414,9 +1419,31 @@ uint32_t od_leds_keys(void)              /* bit k: key k lit */
 #define TRAIL_MID_MS 160u
 #define TRAIL_END_MS 450u
 static uint32_t led_prev, led_trail, led_off_ms[27];
+/* idle (nothing touched for 8 s, nothing sounding, the sequencer stopped, not on its pages): keys light up at
+ * random and fade with their trail, as the stars twinkle */
+static uint32_t act_ms, tw_next, tw_rng = 0x51ED270Bu, tw_on, tw_ms[27];
+static void activity(void) { act_ms = od_ms(); tw_on = 0; }
+static uint32_t idle_twinkle(uint32_t now)
+{
+    uint32_t i, m = 0;
+    if (now - act_ms < 8000u || sq.playing || voices_active() || step_mode() || od_splash()) { tw_on = 0; return 0; }
+    if ((int32_t)(now - tw_next) >= 0) {        /* a new one every 0.15 to 0.6 s */
+        tw_rng ^= tw_rng << 13; tw_rng ^= tw_rng >> 17; tw_rng ^= tw_rng << 5;
+        i = tw_rng % 27u;
+        tw_on |= 1u << i;
+        tw_ms[i] = now;
+        tw_next = now + 150u + (tw_rng >> 8) % 450u;
+    }
+    for (i = 0; i < 27u; i++)
+        if (tw_on >> i & 1u) {
+            if (now - tw_ms[i] < 110u) m |= 1u << i;   /* lit a moment, then the trail */
+            else tw_on &= ~(1u << i);
+        }
+    return m;
+}
 void od_leds_key_levels(uint8_t *lv)
 {
-    uint32_t m = od_leds_keys(), now = od_ms(), i;
+    uint32_t now = od_ms(), m = od_leds_keys() | idle_twinkle(now), i;
     for (i = 0; i < 27u; i++) {
         uint32_t b = 1u << i;
         if (m & b) { lv[i] = 3; led_trail &= ~b; continue; }

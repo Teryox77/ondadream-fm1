@@ -202,6 +202,20 @@ int main(void)
         od_key(3, 1); tick(20); od_key(3, 0); tick(50); od_key(3, 1); od_leds_key_levels(lv); if (lv[3] != 3) { printf("trail: pressed again not lit\n"); bad++; }
         od_key(3, 0);
         if (bad) { printf("trail: %d failures\n", bad); return 1; }
+        {   /* idle: after 8 s untouched and silent, keys twinkle (lit and trails); a key stops it */
+            int lit = 0, any = 0, j, i2;
+            od_key(7, 0); od_key(11, 0); od_key(14, 0);   /* (the keys held since the start) */
+            synth_panic(); seq_stop();
+            for (j = 0; j < 400; j++) {           /* 10 s, a look every 25 ms */
+                tick(25); od_leds_key_levels(lv);
+                for (i2 = 0; i2 < 27; i2++) { if (j > 340 && lv[i2] == 3) lit++; if (j > 340 && lv[i2]) any++; if (j < 300 && lv[i2] == 3) { printf("idle: a key lit before 8 s\n"); bad++; j = 400; break; } }
+            }
+            if (!lit || !any) { printf("idle: no twinkle (%d lit, %d any)\n", lit, any); bad++; }
+            od_key(3, 1); od_key(3, 0); tick(600); od_leds_key_levels(lv);
+            for (i2 = 0, any = 0; i2 < 27; i2++) any += lv[i2] != 0;
+            if (any) { printf("idle: still twinkling after a key (%d)\n", any); bad++; }
+            if (bad) { printf("idle: %d failures\n", bad); return 1; }
+        }
         printf("trail ok\n");
     }
     printf("ok, %u ms\n", now_ms);
