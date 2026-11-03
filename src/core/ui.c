@@ -325,8 +325,9 @@ static void viz_make(int i)
 }
 
 /* the screen's own starfield */
-static uint8_t gst_x[170], gst_y[170], gst_s[170];
-static float gst_tw[170];
+static uint8_t gst_x[170], gst_y[170], gst_s[170], gst_c0[170], gst_c1[170];
+static float gst_tw[170], gst_ph[170], gst_rt[170];
+static const uint32_t STAR_TINT[6] = {0xE6ECF5, 0x7FB2FF, 0xFFD27A, 0xFF8FC8, 0x7FFFD4, 0xC49BFF};
 static void stars_init(void)
 {
     int i;
@@ -335,6 +336,63 @@ static void stars_init(void)
         gst_y[i] = (uint8_t)(rnd() % 157u);
         gst_tw[i] = rndf() * 6.28f;
         gst_s[i] = rndf() < .12f ? 2 : 1;
+        gst_c0[i] = (uint8_t)(rnd() % 6u);       /* each star drifts between two tints, at its own pace */
+        gst_c1[i] = (uint8_t)((gst_c0[i] + 1u + rnd() % 5u) % 6u);
+        gst_ph[i] = rndf() * 6.28f;
+        gst_rt[i] = .0008f + rndf() * .0016f;
+    }
+}
+/* the background: the stars twinkle and change colour; now and then a comet crosses the sky */
+static struct { uint8_t on; uint32_t t0, next; float x0, y0, vx, vy, len; uint16_t c; } comet = {0, 0, 4000u};
+static uint32_t comet_rng = 0x6B43A9B5u;
+static float comet_rf(void) { comet_rng ^= comet_rng << 13; comet_rng ^= comet_rng >> 17; comet_rng ^= comet_rng << 5; return (float)(comet_rng >> 8) * (1.f / 16777216.f); }
+static void dr_sky(uint32_t now)
+{
+    int k;
+    for (k = 0; k < 170; k++) {
+        float tw = .5f + .5f * g_sin((float)now * .0015f + gst_tw[k]), m = .5f + .5f * g_sin((float)now * gst_rt[k] + gst_ph[k]);
+        float a = gst_s[k] == 2 ? .35f + .6f * tw : .18f + .45f * tw;
+        uint16_t c = mix565(hexc(STAR_TINT[gst_c0[k]]), hexc(STAR_TINT[gst_c1[k]]), (uint32_t)(m * 256.f));
+        blend(gst_x[k], 19 + gst_y[k], c, (uint32_t)(a * 256.f));
+        if (gst_s[k] == 2 && tw > .7f) {          /* the bright ones flare a little */
+            uint32_t f = (uint32_t)((tw - .7f) * 1.2f * a * 256.f);
+            blend(gst_x[k] - 1, 19 + gst_y[k], c, f); blend(gst_x[k] + 1, 19 + gst_y[k], c, f);
+            if (gst_y[k] > 0) blend(gst_x[k], 18 + gst_y[k], c, f);
+            if (gst_y[k] < 156) blend(gst_x[k], 20 + gst_y[k], c, f);
+        }
+    }
+    if (!comet.on && (int32_t)(now - comet.next) >= 0) {   /* a new comet: from the top or a side, downwards */
+        static const uint32_t CC[4] = {0xBFE6FF, 0xFFFFFF, 0xFFE3A8, 0xA8FFE8};
+        float sp = 110.f + 90.f * comet_rf(), ang = .35f + .5f * comet_rf();   /* px/s; radians below the horizon */
+        int left = comet_rf() < .5f;
+        comet.on = 1;
+        comet.t0 = now;
+        comet.x0 = left ? -10.f : 250.f - 120.f * comet_rf();
+        comet.y0 = left ? 19.f + 70.f * comet_rf() : 12.f;
+        if (!left && comet_rf() < .5f) comet.x0 = 20.f + 120.f * comet_rf();
+        comet.vx = sp * g_cos(ang) * (left ? 1.f : (comet.x0 > 120.f ? -1.f : 1.f));
+        comet.vy = sp * g_sin(ang);
+        comet.len = 26.f + 22.f * comet_rf();
+        comet.c = hexc(CC[(int)(comet_rf() * 4.f) & 3]);
+    }
+    if (comet.on) {
+        float t = (float)(now - comet.t0) * .001f, hx = comet.x0 + comet.vx * t, hy = comet.y0 + comet.vy * t;
+        float sp = g_sqrt(comet.vx * comet.vx + comet.vy * comet.vy), ux = comet.vx / sp, uy = comet.vy / sp, fade;
+        int i;
+        float tx = hx - ux * comet.len, ty = hy - uy * comet.len;   /* the tail's end: gone once it has left the sky */
+        if (ty > 176.f || (comet.vx > 0.f && tx > 250.f) || (comet.vx < 0.f && tx < -10.f) || t > 6.f) {
+            comet.on = 0;                        /* gone: the next in 6 to 14 s */
+            comet.next = now + 6000u + (uint32_t)(8000.f * comet_rf());
+        } else {
+            fade = t < .25f ? t * 4.f : 1.f;
+            for (i = 0; i < 12; i++) {           /* the tail: thinner and fainter behind */
+                float a0 = (float)i / 12.f, a1 = (float)(i + 1) / 12.f;
+                float x0 = hx - ux * comet.len * a0, y0 = hy - uy * comet.len * a0, x1 = hx - ux * comet.len * a1, y1 = hy - uy * comet.len * a1;
+                if (y0 < 19.f || y1 < 19.f || y0 > 176.f || y1 > 176.f) continue;
+                seg(x0, y0, x1, y1, 1.6f - a0, comet.c, (1.f - a0) * (1.f - a0) * .8f * fade);
+            }
+            if (hy >= 20.f && hy <= 175.f) dot(hx, hy, 1.f, hexc(0xFFFFFF));
+        }
     }
 }
 
@@ -1026,7 +1084,6 @@ static void dr_toast(uint32_t now)
 int od_frame(uint16_t *frame)
 {
     uint32_t now = od_ms();
-    int k;
     fb = frame;
     g_reset();
     if (od_splash()) {
@@ -1041,10 +1098,7 @@ int od_frame(uint16_t *frame)
     fill_rect(0, 0, 240, 240, C_BG);
     dr_header();
     /* the scene: 240 x 157 from y 19 */
-    for (k = 0; k < 170; k++) {
-        float a = .12f + .22f * (.5f + .5f * g_sin((float)now * .0015f + gst_tw[k]));
-        blend(gst_x[k], 19 + gst_y[k], hexc(0xC3CDDC), (uint32_t)(a * 256.f));
-    }
+    dr_sky(now);
     g_save();
     g_translate(0, 19);
     switch (page) {
