@@ -62,6 +62,8 @@ int main(void)
         od_key(1, 1); od_key(1, 0); if (sel_track != 1) { printf("black key 1: not track 1\n"); bad++; }
         od_key(8, 1); od_key(8, 0); if (sel_track != 0) { printf("black key 4: not the drums\n"); bad++; }
         od_key(13, 1); od_key(13, 0); if (sel_drum != 1) { printf("black key 6: not the snare (%d)\n", sel_drum); bad++; }
+        { int r0 = rhythm_idx, p0 = preset_idx; od_enc(OE_PRESET, 1); if (rhythm_idx != (r0 + 1) % 10 || preset_idx != p0) { printf("PRESETS on D: not the rhythm\n"); bad++; } od_enc(OE_PRESET, -1); }
+        { int q0 = tr[2].preset, p0 = preset_idx; sel_track = 2; od_enc(OE_PRESET, -11); if (tr[2].preset != (q0 - 11 + n_presets()) % n_presets() || preset_idx != p0) { printf("PRESETS on track 2: %d\n", tr[2].preset); bad++; } od_enc(OE_PRESET, 11); sel_track = 0; }
         for (r = 0; r < 10; r++) { od_enc(OE_K4, 1); tick(250); }      /* every rhythm */
         od_frame(frame); save("seq_drums");
         for (t = 1; t < 4; t++) {                                  /* every preset, every note, each synth track */

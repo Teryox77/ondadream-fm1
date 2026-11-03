@@ -1263,7 +1263,12 @@ void od_enc(uint32_t e, int32_t s)
 {
     if (!s || od_splash()) return;
     switch (e) {
-    case OE_PRESET: preset_go(preset_idx + s); break;
+    case OE_PRESET:
+        if (step_mode()) {                       /* SEQUENCER / MIXER: the chosen track's preset, or the drums' rhythm */
+            if (sel_track) { int n = n_presets(); tr[sel_track].preset = ((tr[sel_track].preset + s) % n + n) % n; }
+            else set_rhythm(rhythm_idx + s);
+        } else preset_go(preset_idx + s);
+        break;
     case OE_SELECT: { int p = page + (s > 0 ? 1 : -1); set_page((p + PG_N) % PG_N); } break;
     case OE_ALGO:
         if (step_mode()) sel_track = DISP[CLAMP(slot_of(sel_track) + s, 0, (int)NTR - 1)];   /* the track */
