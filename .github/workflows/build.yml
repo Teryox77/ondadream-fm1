@@ -76,6 +76,7 @@ jobs:
           mkdir -p /tmp/odui
           gcc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/core -Isrc/gen tests/ui_test.c -lm -o /tmp/ui_test && /tmp/ui_test
           gcc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/core -Isrc/gen tests/knob_test.c -lm -o /tmp/knob_test && /tmp/knob_test
+          gcc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/core -Isrc/gen tests/store_test.c -lm -o /tmp/store_test && /tmp/store_test
 
       - name: Firmware
         run: |

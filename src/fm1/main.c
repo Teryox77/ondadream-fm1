@@ -313,84 +313,17 @@ static void rescue_main(void)
     }
 }
 
-/* ---- the saved presets: two 4 KiB sectors taken in turn (the board's own-data flash below the stores, which no
- * installer writes: bsp/chip/fm1_flash.h FL_XDATA0), each a header (magic, sequence, length, CRC-32) and the core's
- * image; the header goes in last, so a save cut by a power-off leaves the other sector, the one before, in charge ---- */
-#define STORE_A 0x93000u
-#define STORE_B 0x94000u
-#define STORE_MAGIC 0x3153444Fu                 /* "ODS1" */
-#define STORE_HDR 16u
-static uint8_t store_buf[STORE_HDR + OD_STORE_MAX_BYTES];
-static uint32_t store_at, store_seq;            /* the sector in charge (0 none) and its sequence */
-static uint32_t crc32(const uint8_t *p, uint32_t n)
+/* ---- the saved presets and settings (fm1_store.c): this board's flash under them ---- */
+static int store_fread(uint32_t off, void *p, uint32_t n) { return ota_fread(off, p, n); }
+static int store_erase(uint32_t off) { uint32_t took; return fl_erase4k(off, &took); }
+static int store_prog(uint32_t off, const uint8_t *p, uint32_t n) { return fl_write(off, p, n); }
+static void store_quiet(void)                   /* the erase stops the interrupts for ~50 ms: silence meanwhile */
 {
-    uint32_t c = 0xFFFFFFFFu, k;
-    while (n--) {
-        c ^= *p++;
-        for (k = 0; k < 8u; k++) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
-    }
-    return ~c;
-}
-static uint32_t rd32(const uint8_t *b) { return (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24; }
-static void wr32(uint8_t *b, uint32_t v) { b[0] = (uint8_t)v; b[1] = (uint8_t)(v >> 8); b[2] = (uint8_t)(v >> 16); b[3] = (uint8_t)(v >> 24); }
-static int store_read(uint32_t at, uint32_t *seq)   /* the sector's image into store_buf; its length, or 0 */
-{
-    uint32_t len;
-    if (ota_fread(at, store_buf, STORE_HDR) || rd32(store_buf) != STORE_MAGIC)
-        return 0;
-    len = rd32(store_buf + 8);
-    if (len < 8u || len > OD_STORE_MAX_BYTES || ota_fread(at + STORE_HDR, store_buf + STORE_HDR, len))
-        return 0;
-    if (crc32(store_buf + 4, 8u + len) != rd32(store_buf + 12))
-        return 0;
-    *seq = rd32(store_buf + 4);
-    return (int)len;
-}
-static void store_boot(void)
-{
-    uint32_t sa = 0, sb = 0;
-    int la, lb;
-    if (!flash_ok)
-        return;
-    la = store_read(STORE_A, &sa);
-    lb = store_read(STORE_B, &sb);
-    if (lb && (!la || (int32_t)(sb - sa) > 0)) {
-        store_at = STORE_B; store_seq = sb;
-    } else if (la) {
-        store_at = STORE_A; store_seq = sa;
-    } else
-        return;
-    if (store_read(store_at, &sa) && od_store_load(store_buf + STORE_HDR, rd32(store_buf + 8)) == 0)
-        return;
-    store_at = 0;                               /* (not a store the core takes: the next save starts over) */
-}
-static int store_save(void)
-{
-    uint32_t len = od_store_image(store_buf + STORE_HDR, OD_STORE_MAX_BYTES), at = store_at == STORE_A ? STORE_B : STORE_A;
-    uint32_t i, took;
-    uint8_t chk[64];
-    if (!flash_ok || !len)
-        return 0;
-    wr32(store_buf, STORE_MAGIC);
-    wr32(store_buf + 4, store_seq + 1u);
-    wr32(store_buf + 8, len);
-    wr32(store_buf + 12, crc32(store_buf + 4, 8u + len));
+    uint32_t i;
     for (i = 0; i < sizeof abuf / sizeof abuf[0]; i++)
-        abuf[i] = 0;                            /* the erase stops the interrupts for ~50 ms: silence meanwhile */
-    if (fl_erase4k(at, &took) || fl_write(at + STORE_HDR, store_buf + STORE_HDR, len) || fl_write(at, store_buf, STORE_HDR))
-        return 0;
-    for (i = 0; i < STORE_HDR + len; i += sizeof chk) {   /* read back */
-        uint32_t k = STORE_HDR + len - i < sizeof chk ? STORE_HDR + len - i : sizeof chk, j;
-        if (ota_fread(at + i, chk, k))
-            return 0;
-        for (j = 0; j < k; j++)
-            if (chk[j] != store_buf[i + j])
-                return 0;
-    }
-    store_at = at;
-    store_seq++;
-    return 1;
+        abuf[i] = 0;
 }
+#include "fm1_store.c"
 
 /* ---- the main loop ---- */
 static void app_main(void)
@@ -424,7 +357,8 @@ static void app_main(void)
     boot_stage(4);
     od_init();
     od_selftest();
-    store_boot();                               /* the saved presets */
+    if (flash_ok)
+        store_boot();                           /* the saved presets and settings */
     od_frame(fbuf);                             /* the splash */
     boot_stage(5);
     lcd_flush(1);
@@ -504,7 +438,7 @@ static void app_main(void)
             }
         }
         if (od_store_dirty())                   /* SAVE */
-            od_store_done(store_save());
+            od_store_done(flash_ok && store_save());
         /* the screen, at most ~30 times a second */
         if (now - last_frame >= 33u) {
             last_frame = now;
